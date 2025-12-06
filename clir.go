@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -83,6 +84,7 @@ type Middleware func(Handler) Handler
 type segment struct {
 	lit   string // non-empty for static segment: "comp", "image", "build"
 	param string // non-empty for param segment: e.g. "component" for "<component>"
+	sort  int    // optional sort/level hint derived from numeric prefixes
 }
 
 type route struct {
@@ -101,6 +103,42 @@ func New() *Router {
 	return &Router{}
 }
 
+// parseSegments converts pattern parts into segments, interpreting
+// leading integer tokens as sort/level hints for the next segment.
+//
+// Example parts:
+//
+//	["1", "comp", "<component>", "2", "image", "build"]
+//
+// => segments:
+//
+//	{lit:"comp", sort:1}, {param:"component", sort:0},
+//	{lit:"image", sort:2}, {lit:"build", sort:0}
+func parseSegments(parts []string) []segment {
+	segs := make([]segment, 0, len(parts))
+	var pendingSort int
+
+	for _, p := range parts {
+		// If it's a pure integer, treat it as a sort hint for the next segment.
+		if n, err := strconv.Atoi(p); err == nil {
+			pendingSort = n
+			continue
+		}
+
+		s := segment{sort: pendingSort}
+		pendingSort = 0
+
+		if strings.HasPrefix(p, "<") && strings.HasSuffix(p, ">") {
+			s.param = p[1 : len(p)-1]
+		} else {
+			s.lit = p
+		}
+		segs = append(segs, s)
+	}
+
+	return segs
+}
+
 // Handle registers a pattern, description and handler directly.
 //
 // Pattern is a space-separated sequence of segments, where
@@ -112,15 +150,7 @@ func New() *Router {
 //	r.Handle("comp <component> image build", "Build images", handler)
 func (r *Router) Handle(pattern, desc string, h Handler) {
 	parts := strings.Fields(pattern)
-	segs := make([]segment, len(parts))
-
-	for i, p := range parts {
-		if strings.HasPrefix(p, "<") && strings.HasSuffix(p, ">") {
-			segs[i] = segment{param: p[1 : len(p)-1]}
-		} else {
-			segs[i] = segment{lit: p}
-		}
-	}
+	segs := parseSegments(parts)
 
 	r.routes = append(r.routes, route{
 		segments: segs,
@@ -160,25 +190,29 @@ func (r *Router) PrintHelp(w io.Writer) {
 	}
 
 	entries := make([]struct {
-		pat  string
-		desc string
+		pat     string
+		sortPat string
+		desc    string
 	}, len(r.routes))
 
 	for i, rt := range r.routes {
 		var parts []string
+		var sortParts []string
 		for _, s := range rt.segments {
 			if s.lit != "" {
 				parts = append(parts, s.lit)
+				sortParts = append(sortParts, fmt.Sprintf("%d %s", s.sort, s.lit))
 			} else {
 				parts = append(parts, "<"+s.param+">")
 			}
 		}
 		entries[i].pat = strings.Join(parts, " ")
+		entries[i].sortPat = strings.Join(sortParts, " ")
 		entries[i].desc = rt.desc
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].pat < entries[j].pat
+		return entries[i].sortPat < entries[j].sortPat
 	})
 
 	maxLen := 0
