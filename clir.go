@@ -437,6 +437,28 @@ func WithChildContext[T any, U any](
 	}
 }
 
+type ParentChild[T any, U any] struct {
+	parent T
+	child  U
+}
+
+func (pc ParentChild[T, U]) Parent() T { return pc.parent }
+func (pc ParentChild[T, U]) Child() U  { return pc.child }
+
+func WithParentChildContext[T any, U any](
+	b *ContextBuilder[T],
+	resolveChild func(parent T, req *Request) (U, error),
+) *ContextBuilder[ParentChild[T, U]] {
+	return WithChildContext(b, func(parent T, req *Request) (ParentChild[T, U], error) {
+		child, err := resolveChild(parent, req)
+		if err != nil {
+			var zero ParentChild[T, U]
+			return zero, err
+		}
+		return ParentChild[T, U]{parent, child}, nil
+	})
+}
+
 // WithContextHandler is a convenience that lifts a typed resolver
 // and ContextHandler into a plain Handler. This lets you use typed
 // contexts even directly with Router.Handle if you don't want the
