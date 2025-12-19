@@ -452,3 +452,157 @@ func ExampleContextBuilder_layered() {
 	// Output:
 	// app=cli-app component=cv-server
 }
+
+func TestRouter_bestMatch_RankingMatrix(t *testing.T) {
+	type tc struct {
+		name       string
+		routes     []string
+		argv       []string
+		wantRoute  string
+		wantParams Params
+		wantExtra  []string
+		wantOK     bool
+	}
+
+	tests := []tc{
+		{
+			name: "static beats param at same depth",
+			routes: []string{
+				"users <id>",
+				"users me",
+			},
+			argv:       []string{"users", "me"},
+			wantRoute:  "users me",
+			wantParams: Params{},
+			wantExtra:  nil,
+			wantOK:     true,
+		},
+		{
+			name: "param route used when no static alternative",
+			routes: []string{
+				"users <id>",
+			},
+			argv:      []string{"users", "42"},
+			wantRoute: "users <id>",
+			wantParams: Params{
+				"id": "42",
+			},
+			wantExtra: nil,
+			wantOK:    true,
+		},
+		{
+			name: "longer route wins over shorter prefix",
+			routes: []string{
+				"comp <component>",
+				"comp <component> image build",
+			},
+			argv:      []string{"comp", "cv-server", "image", "build", "--tag", "latest"},
+			wantRoute: "comp <component> image build",
+			wantParams: Params{
+				"component": "cv-server",
+			},
+			wantExtra: []string{"--tag", "latest"},
+			wantOK:    true,
+		},
+		{
+			name: "static leaf beats param leaf",
+			routes: []string{
+				"docker image <name> build",
+				"docker image list",
+			},
+			argv:       []string{"docker", "image", "list", "-v"},
+			wantRoute:  "docker image list",
+			wantParams: Params{},
+			wantExtra:  []string{"-v"},
+			wantOK:     true,
+		},
+		{
+			name: "deeper static beats shallower param (by rank length)",
+			routes: []string{
+				"docker image <name>",
+				"docker image <name> build",
+			},
+			argv:      []string{"docker", "image", "alpine", "build"},
+			wantRoute: "docker image <name> build",
+			wantParams: Params{
+				"name": "alpine",
+			},
+			wantExtra: nil,
+			wantOK:    true,
+		},
+		{
+			name: "deeper static beats shallower param (by rank length)",
+			routes: []string{
+				"a b <c>",
+				"a <b> <c> <d>",
+			},
+			argv:      []string{"a", "b", "x", "y"},
+			wantRoute: "a b <c>",
+			wantParams: Params{
+				"c": "x",
+			},
+			wantExtra: []string{"y"},
+			wantOK:    true,
+		},
+		{
+			name: "no match",
+			routes: []string{
+				"comp <component> image build",
+				"docker image list",
+			},
+			argv:      []string{"nope"},
+			wantRoute: "",
+			wantOK:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := New()
+
+			// Map route string -> *route captured at registration time.
+			registered := map[string]*route{}
+
+			// Register routes with no-op handlers (we only test matching).
+			for _, pat := range tt.routes {
+				p := pat
+				r.Handle(p, "desc", func(*Request) error { return nil })
+
+				// Capture pointer to the newly-added route.
+				// Assumes Handle appends to r.routes (common pattern).
+				if len(r.routes) == 0 {
+					t.Fatalf("router has no routes after Handle(%q)", p)
+				}
+				registered[p] = &r.routes[len(r.routes)-1]
+			}
+
+			gotRoute, gotReq, ok := r.bestMatch(context.Background(), tt.argv)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !tt.wantOK {
+				if gotRoute != nil || gotReq != nil {
+					t.Fatalf("expected nil route/req on no-match, got route=%v req=%v", gotRoute, gotReq)
+				}
+				return
+			}
+
+			wantPtr := registered[tt.wantRoute]
+			if wantPtr == nil {
+				t.Fatalf("test setup error: wantRoute %q was not registered", tt.wantRoute)
+			}
+			if gotRoute.String() != tt.wantRoute {
+				t.Fatalf("matched route mismatch: got %q, want %q", gotRoute.String(), tt.wantRoute)
+			}
+
+			// Params
+			if fmt.Sprint(gotReq.Params) != fmt.Sprint(tt.wantParams) {
+				t.Fatalf("params mismatch: got %#v, want %#v", gotReq.Params, tt.wantParams)
+			}
+			// Extra
+			if fmt.Sprint(gotReq.Extra) != fmt.Sprint(tt.wantExtra) {
+				t.Fatalf("extra mismatch: got %v, want %v", gotReq.Extra, tt.wantExtra)
+			}
+		})
+	}
+}

@@ -103,6 +103,26 @@ func New() *Router {
 	return &Router{}
 }
 
+func (rt *route) String() string {
+	var b strings.Builder
+	for i, s := range rt.segments {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		switch {
+		case s.lit != "":
+			b.WriteString(s.lit)
+		case s.param != "":
+			b.WriteByte('<')
+			b.WriteString(s.param)
+			b.WriteByte('>')
+		default:
+			b.WriteByte('?')
+		}
+	}
+	return b.String()
+}
+
 // parseSegments converts pattern parts into segments, interpreting
 // leading integer tokens as sort/level hints for the next segment.
 //
@@ -159,26 +179,101 @@ func (r *Router) Handle(pattern, desc string, h Handler) {
 	})
 }
 
-// Run attempts to match argv against registered routes and executes
-// the first matching handler. ctx becomes the root context for the Request.
-func (r *Router) Run(ctx context.Context, argv []string) error {
+// 2 bits per segment, left-to-right => early tokens dominate.
+// Max 32 segments if using uint64 (2*32 = 64).
+// matchRank returns a 2-bit-per-segment rank built left->right (early tokens dominate).
+// Encoding:
+//
+//	10 = literal match
+//	01 = param match
+//
+// With this encoding, longer matches always rank higher than shorter matches (since codes are non-zero).
+// Uses uint64 => max 32 segments.
+func (rt *route) matchArgv(argv []string) (rank uint64, params Params) {
+	segs := rt.segments
+	if len(argv) < len(segs) {
+		return 0, nil
+	}
+	if len(segs) > 32 {
+		return 0, nil
+	}
+
+	params = Params{}
+	for i, s := range segs {
+		arg := argv[i]
+
+		var code uint64
+		switch {
+		case s.lit != "":
+			if arg != s.lit {
+				return 0, nil
+			}
+			code = 0b10
+		case s.param != "":
+			params[s.param] = arg
+			code = 0b01
+		default:
+			return 0, nil
+		}
+
+		// rank = (rank << 2) | code // Right-left LSB-first placement (longest wins)
+		shift := uint(2 * (32 - 1 - i)) // Left-right MSB-first placement (literal wins)
+		rank |= code << shift
+
+	}
+
+	return rank, params
+}
+
+// bestMatch finds the best matching route by highest rank.
+// Returns (routePtr, reqPtr, ok).
+func (r *Router) bestMatch(ctx context.Context, argv []string) (*route, *Request, bool) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for _, rt := range r.routes {
-		params, extra, ok := match(rt.segments, argv)
-		if !ok {
+
+	bestIdx := -1
+	var bestRank uint64
+	var bestParams Params
+	var bestExtra []string
+
+	for i := range r.routes {
+		rt := &r.routes[i]
+
+		rank, params := rt.matchArgv(argv)
+		if rank == 0 {
 			continue
 		}
-		req := &Request{
-			ctx:    ctx,
-			Args:   argv,
-			Params: params,
-			Extra:  extra,
+
+		if bestIdx == -1 || rank > bestRank {
+			bestIdx = i
+			bestRank = rank
+			bestParams = params
+			bestExtra = argv[len(rt.segments):]
 		}
-		return rt.handler(req)
 	}
-	return fmt.Errorf("no matching command")
+
+	if bestIdx == -1 {
+		return nil, nil, false
+	}
+
+	req := &Request{
+		ctx:    ctx,
+		Args:   argv,
+		Params: bestParams,
+		Extra:  bestExtra,
+	}
+	return &r.routes[bestIdx], req, true
+}
+
+// Run attempts to match argv against registered routes and executes
+// the first matching handler. ctx becomes the root context for the Request.
+func (r *Router) Run(ctx context.Context, argv []string) error {
+	rt, req, ok := r.bestMatch(ctx, argv)
+	if !ok {
+		return fmt.Errorf("no matching command")
+	}
+	return rt.handler(req)
 }
 
 // PrintHelp prints all registered patterns and their descriptions,
@@ -196,17 +291,13 @@ func (r *Router) PrintHelp(w io.Writer) {
 	}, len(r.routes))
 
 	for i, rt := range r.routes {
-		var parts []string
 		var sortParts []string
 		for _, s := range rt.segments {
 			if s.lit != "" {
-				parts = append(parts, s.lit)
 				sortParts = append(sortParts, fmt.Sprintf("%d %s", s.sort, s.lit))
-			} else {
-				parts = append(parts, "<"+s.param+">")
 			}
 		}
-		entries[i].pat = strings.Join(parts, " ")
+		entries[i].pat = rt.String()
 		entries[i].sortPat = strings.Join(sortParts, " ")
 		entries[i].desc = rt.desc
 	}
@@ -226,29 +317,6 @@ func (r *Router) PrintHelp(w io.Writer) {
 	for _, e := range entries {
 		fmt.Fprintf(w, format, e.pat, e.desc)
 	}
-}
-
-// match tries to match argv against the given pattern segments.
-func match(segs []segment, argv []string) (Params, []string, bool) {
-	if len(argv) < len(segs) {
-		return nil, nil, false
-	}
-
-	params := Params{}
-	for i, s := range segs {
-		arg := argv[i]
-		switch {
-		case s.lit != "":
-			if arg != s.lit {
-				return nil, nil, false
-			}
-		case s.param != "":
-			params[s.param] = arg
-		}
-	}
-
-	extra := argv[len(segs):]
-	return params, extra, true
 }
 
 // Routes is a convenience entry-point to build routes with a Builder.
@@ -444,6 +512,9 @@ type ParentChild[T any, U any] struct {
 
 func (pc ParentChild[T, U]) Parent() T { return pc.parent }
 func (pc ParentChild[T, U]) Child() U  { return pc.child }
+
+// This doesn't need validation. The resolver can return an error for that.
+// func (pc ParentChild[T, U]) Validate() error { return nil }
 
 func WithParentChildContext[T any, U any](
 	b *ContextBuilder[T],
