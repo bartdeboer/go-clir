@@ -312,7 +312,6 @@ func (r *Router) PrintHelp(w io.Writer) {
 			maxLen = l
 		}
 	}
-	fmt.Fprintln(w, "Available commands:")
 	format := fmt.Sprintf("  %%-%ds  %%s\n", maxLen)
 	for _, e := range entries {
 		fmt.Fprintf(w, format, e.pat, e.desc)
