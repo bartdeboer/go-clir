@@ -128,7 +128,7 @@ func TestRequest_Context_DefaultBackgroundWhenNil(t *testing.T) {
 	})
 
 	// Run with nil context; router should use context.Background().
-	if err := r.Run(nil, []string{"cmd"}); err != nil {
+	if err := r.Run(context.TODO(), []string{"cmd"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 

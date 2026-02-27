@@ -271,7 +271,7 @@ func (r *Router) bestMatch(ctx context.Context, argv []string) (*route, *Request
 func (r *Router) Run(ctx context.Context, argv []string) error {
 	rt, req, ok := r.bestMatch(ctx, argv)
 	if !ok {
-		return fmt.Errorf("no matching command")
+		return fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
 	}
 	return rt.handler(req)
 }
