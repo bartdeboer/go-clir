@@ -49,16 +49,6 @@ func routeInfos(routes []*route) []RouteInfo {
 	return out
 }
 
-// ChildRoutes returns the direct child routes under argv.
-func (r *Router) ChildRoutes(argv []string) []RouteInfo {
-	return routeInfos(r.childRoutes(argv))
-}
-
-// DescendantRoutes returns descendant routes up to the requested number of levels.
-func (r *Router) DescendantRoutes(argv []string, levels int) []RouteInfo {
-	return routeInfos(r.descendantRoutes(argv, levels))
-}
-
 // RunWithHelp is the convenience form requested originally.
 // It writes managed help to stdout.
 func (r *Router) RunWithHelp(ctx context.Context, argv []string) error {
@@ -130,9 +120,9 @@ func isExplicitHelpRoute(rt *route) bool {
 func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool) error {
 	helpRoute, hasHelpRoute := r.bestHelpRoute(append(append([]string{}, scope...), helpToken))
 
-	children := filterOutHelpRoutes(r.helpRoutes(scope, all))
+	entries := r.helpEntries(scope, all)
 
-	if !hasHelpRoute && len(children) == 0 {
+	if !hasHelpRoute && len(entries) == 0 {
 		return fmt.Errorf("no help available for `%s`", strings.Join(scope, " "))
 	}
 
@@ -140,7 +130,7 @@ func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool) error {
 		fmt.Fprintln(w, helpRoute.desc)
 	}
 
-	if len(children) == 0 {
+	if len(entries) == 0 {
 		return nil
 	}
 
@@ -149,25 +139,16 @@ func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool) error {
 	}
 
 	fmt.Fprintln(w, "Available commands:")
-	r.writeHelpEntries(w, children)
+	r.writeHelpEntries(w, entries)
 	return nil
 }
 
-func (r *Router) helpRoutes(scope []string, all bool) []*route {
+func (r *Router) helpEntries(scope []string, all bool) []RouteInfo {
+	descendants := r.descendantRoutes(scope)
 	if all {
-		return r.descendantRoutes(scope, maxRouteDepth(r.routes))
+		return sortedRouteInfos(filterOutHelpRoutes(descendants))
 	}
-	return r.childRoutes(scope)
-}
-
-func maxRouteDepth(routes []route) int {
-	maxDepth := 0
-	for i := range routes {
-		if len(routes[i].segments) > maxDepth {
-			maxDepth = len(routes[i].segments)
-		}
-	}
-	return maxDepth
+	return consolidateHelpRoutes(scope, descendants, 1)
 }
 
 // PrintHelp prints all registered patterns and their descriptions.
@@ -183,7 +164,7 @@ func (r *Router) PrintHelp(w io.Writer) {
 	}
 	sortRoutesForHelp(all)
 
-	r.writeHelpEntries(w, all)
+	r.writeHelpEntries(w, sortedRouteInfos(all))
 }
 
 func filterOutHelpRoutes(routes []*route) []*route {
@@ -196,8 +177,72 @@ func filterOutHelpRoutes(routes []*route) []*route {
 	return out
 }
 
-func (r *Router) writeHelpEntries(w io.Writer, routes []*route) {
-	r.helpEntryWriter()(w, sortedRouteInfos(routes))
+func consolidateHelpRoutes(scope []string, routes []*route, level int) []RouteInfo {
+	if level <= 0 {
+		return nil
+	}
+
+	entryDepth := len(scope) + level
+	entries := map[string]*route{}
+
+	for _, rt := range routes {
+		relDepth := len(rt.segments) - len(scope)
+		if relDepth <= 0 {
+			continue
+		}
+
+		if isExplicitHelpRoute(rt) {
+			if len(rt.segments) == entryDepth+1 {
+				entry := routePrefix(rt, entryDepth)
+				entry.desc = rt.desc
+				key := entry.String()
+				existing, ok := entries[key]
+				if !ok {
+					entries[key] = entry
+				} else if existing.desc == "" {
+					existing.desc = entry.desc
+				}
+			}
+			continue
+		}
+
+		depth := len(rt.segments)
+		if relDepth > level {
+			depth = entryDepth
+		}
+
+		entry := routePrefix(rt, depth)
+		if relDepth > level {
+			entry.desc = ""
+		}
+
+		key := entry.String()
+		existing, ok := entries[key]
+		if !ok {
+			entries[key] = entry
+			continue
+		}
+		if existing.desc == "" && entry.desc != "" {
+			existing.desc = entry.desc
+		}
+	}
+
+	out := make([]*route, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry)
+	}
+	return sortedRouteInfos(out)
+}
+
+func routePrefix(rt *route, n int) *route {
+	return &route{
+		segments: append([]segment{}, rt.segments[:n]...),
+		desc:     rt.desc,
+	}
+}
+
+func (r *Router) writeHelpEntries(w io.Writer, entries []RouteInfo) {
+	r.helpEntryWriter()(w, entries)
 }
 
 func sortedRouteInfos(routes []*route) []RouteInfo {
@@ -241,6 +286,10 @@ func WriteHelpColumns(w io.Writer, routes []RouteInfo) {
 
 	format := fmt.Sprintf("  %%-%ds  %%s\n", maxLen)
 	for _, e := range routes {
+		if e.Description == "" {
+			fmt.Fprintf(w, "  %s\n", e.Pattern)
+			continue
+		}
 		fmt.Fprintf(w, format, e.Pattern, e.Description)
 	}
 }
@@ -248,6 +297,10 @@ func WriteHelpColumns(w io.Writer, routes []RouteInfo) {
 // WriteHelpInline writes command entries as "<pattern> - <description>" lines.
 func WriteHelpInline(w io.Writer, routes []RouteInfo) {
 	for _, e := range routes {
+		if e.Description == "" {
+			fmt.Fprintln(w, e.Pattern)
+			continue
+		}
 		fmt.Fprintf(w, "%s - %s\n", e.Pattern, e.Description)
 	}
 }

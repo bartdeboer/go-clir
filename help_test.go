@@ -15,7 +15,7 @@ func routePatterns(routes []*route) []string {
 	return out
 }
 
-func TestRouter_DescendantRoutes(t *testing.T) {
+func TestRouter_descendantRoutes(t *testing.T) {
 	r := New()
 
 	r.Handle("comp <component>", "Component root", func(req *Request) error { return nil })
@@ -24,29 +24,8 @@ func TestRouter_DescendantRoutes(t *testing.T) {
 	r.Handle("comp <component> logs", "Logs", func(req *Request) error { return nil })
 	r.Handle("status", "Status", func(req *Request) error { return nil })
 
-	t.Run("zero levels returns none", func(t *testing.T) {
-		matches := r.descendantRoutes([]string{"comp", "api"}, 0)
-		if len(matches) != 0 {
-			t.Fatalf("got %d matches, want 0", len(matches))
-		}
-	})
-
-	t.Run("one level returns direct children", func(t *testing.T) {
-		matches := r.descendantRoutes([]string{"comp", "api"}, 1)
-
-		got := strings.Join(routePatterns(matches), "|")
-		want := strings.Join([]string{
-			"comp <component> image",
-			"comp <component> logs",
-		}, "|")
-
-		if got != want {
-			t.Fatalf("got %v, want %v", routePatterns(matches), strings.Split(want, "|"))
-		}
-	})
-
-	t.Run("two levels returns children and grandchildren", func(t *testing.T) {
-		matches := r.descendantRoutes([]string{"comp", "api"}, 2)
+	t.Run("returns all descendants", func(t *testing.T) {
+		matches := r.descendantRoutes([]string{"comp", "api"})
 
 		got := strings.Join(routePatterns(matches), "|")
 		want := strings.Join([]string{
@@ -61,7 +40,7 @@ func TestRouter_DescendantRoutes(t *testing.T) {
 	})
 
 	t.Run("no matches", func(t *testing.T) {
-		matches := r.descendantRoutes([]string{"deploy"}, 1)
+		matches := r.descendantRoutes([]string{"deploy"})
 		if len(matches) != 0 {
 			t.Fatalf("got %d matches, want 0", len(matches))
 		}
@@ -258,6 +237,91 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 
 			if got := buf.String(); got != tt.want {
 				t.Fatalf("unexpected help output for argv %v\ngot:\n%q\nwant:\n%q", tt.argv, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRouter_FRunWithHelp_ConsolidatesImplicitChildPrefixes(t *testing.T) {
+	r := New()
+	noop := func(req *Request) error { return nil }
+
+	r.Handle("gcloud help", "Google Cloud commands.", noop)
+	r.Handle("gcloud login", "Authenticate with gcloud", noop)
+	r.Handle("gcloud cluster help", "Cluster commands.", noop)
+	r.Handle("gcloud cluster configure", "Configure current cluster context", noop)
+	r.Handle("gcloud cluster create <name>", "Create cluster from configuration", noop)
+	r.Handle("gcloud image <name> upload", "Upload image to remote registry", noop)
+	r.Handle("gcloud dns list", "List DNS auth records", noop)
+
+	var buf bytes.Buffer
+	if err := r.FRunWithHelp(context.Background(), &buf, []string{"gcloud", "help"}); err != nil {
+		t.Fatalf("FRunWithHelp returned error: %v", err)
+	}
+
+	want := "" +
+		"Google Cloud commands.\n" +
+		"\n" +
+		"Available commands:\n" +
+		"  gcloud cluster  Cluster commands.\n" +
+		"  gcloud dns\n" +
+		"  gcloud image\n" +
+		"  gcloud login    Authenticate with gcloud\n"
+
+	if got := buf.String(); got != want {
+		t.Fatalf("unexpected help output\ngot:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
+	r := New()
+	noop := func(req *Request) error { return nil }
+
+	r.Handle("tool help", "Tool commands.", noop)
+	r.Handle("tool direct", "Direct command", noop)
+	r.Handle("tool direct help", "Direct help text should not override the command.", noop)
+	r.Handle("tool group help", "Group commands.", noop)
+	r.Handle("tool group run", "Run group task", noop)
+	r.Handle("tool empty run", "Run empty task", noop)
+
+	tests := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{
+			name: "consolidated help",
+			argv: []string{"tool", "help"},
+			want: "" +
+				"Tool commands.\n" +
+				"\n" +
+				"Available commands:\n" +
+				"  tool direct  Direct command\n" +
+				"  tool empty\n" +
+				"  tool group   Group commands.\n",
+		},
+		{
+			name: "all descendants",
+			argv: []string{"tool", "help", "all"},
+			want: "" +
+				"Tool commands.\n" +
+				"\n" +
+				"Available commands:\n" +
+				"  tool direct     Direct command\n" +
+				"  tool empty run  Run empty task\n" +
+				"  tool group run  Run group task\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := r.FRunWithHelp(context.Background(), &buf, tt.argv); err != nil {
+				t.Fatalf("FRunWithHelp returned error: %v", err)
+			}
+
+			if got := buf.String(); got != tt.want {
+				t.Fatalf("unexpected help output\ngot:\n%q\nwant:\n%q", got, tt.want)
 			}
 		})
 	}

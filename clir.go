@@ -301,15 +301,7 @@ func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
 	return rank, params
 }
 
-func (r *Router) childRoutes(argv []string) []*route {
-	return r.descendantRoutes(argv, 1)
-}
-
-func (r *Router) descendantRoutes(argv []string, levels int) []*route {
-	if levels <= 0 {
-		return nil
-	}
-
+func (r *Router) descendantRoutes(argv []string) []*route {
 	var out []*route
 	for i := range r.routes {
 		rt := &r.routes[i]
@@ -319,8 +311,7 @@ func (r *Router) descendantRoutes(argv []string, levels int) []*route {
 			continue
 		}
 
-		relDepth := len(rt.segments) - len(argv)
-		if relDepth <= 0 || relDepth > levels {
+		if len(rt.segments) <= len(argv) {
 			continue
 		}
 
