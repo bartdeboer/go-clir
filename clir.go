@@ -32,8 +32,6 @@ package clir
 import (
 	"context"
 	"fmt"
-	"io"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -95,7 +93,8 @@ type route struct {
 
 // Router holds all registered routes and can execute them for argv.
 type Router struct {
-	routes []route
+	routes             []route
+	helpEntryFormatter HelpEntryFormatter
 }
 
 // New creates an empty Router.
@@ -266,6 +265,72 @@ func (r *Router) bestMatch(ctx context.Context, argv []string) (*route, *Request
 	return &r.routes[bestIdx], req, true
 }
 
+func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
+	if len(argv) == 0 {
+		return 1, Params{}
+	}
+	if len(argv) > len(rt.segments) {
+		return 0, nil
+	}
+	if len(argv) > 32 {
+		return 0, nil
+	}
+
+	params = Params{}
+	for i, arg := range argv {
+		s := rt.segments[i]
+
+		var code uint64
+		switch {
+		case s.lit != "":
+			if arg != s.lit {
+				return 0, nil
+			}
+			code = 0b10
+		case s.param != "":
+			params[s.param] = arg
+			code = 0b01
+		default:
+			return 0, nil
+		}
+
+		shift := uint(2 * (32 - 1 - i))
+		rank |= code << shift
+	}
+
+	return rank, params
+}
+
+func (r *Router) childRoutes(argv []string) []*route {
+	return r.descendantRoutes(argv, 1)
+}
+
+func (r *Router) descendantRoutes(argv []string, levels int) []*route {
+	if levels <= 0 {
+		return nil
+	}
+
+	var out []*route
+	for i := range r.routes {
+		rt := &r.routes[i]
+
+		rank, _ := rt.matchPrefix(argv)
+		if rank == 0 {
+			continue
+		}
+
+		relDepth := len(rt.segments) - len(argv)
+		if relDepth <= 0 || relDepth > levels {
+			continue
+		}
+
+		out = append(out, rt)
+	}
+
+	sortRoutesForHelp(out)
+	return out
+}
+
 // Run attempts to match argv against registered routes and executes
 // the first matching handler. ctx becomes the root context for the Request.
 func (r *Router) Run(ctx context.Context, argv []string) error {
@@ -274,48 +339,6 @@ func (r *Router) Run(ctx context.Context, argv []string) error {
 		return fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
 	}
 	return rt.handler(req)
-}
-
-// PrintHelp prints all registered patterns and their descriptions,
-// sorted alphabetically by pattern.
-func (r *Router) PrintHelp(w io.Writer) {
-	if len(r.routes) == 0 {
-		fmt.Fprintln(w, "No commands registered.")
-		return
-	}
-
-	entries := make([]struct {
-		pat     string
-		sortPat string
-		desc    string
-	}, len(r.routes))
-
-	for i, rt := range r.routes {
-		var sortParts []string
-		for _, s := range rt.segments {
-			if s.lit != "" {
-				sortParts = append(sortParts, fmt.Sprintf("%d %s", s.sort, s.lit))
-			}
-		}
-		entries[i].pat = rt.String()
-		entries[i].sortPat = strings.Join(sortParts, " ")
-		entries[i].desc = rt.desc
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].sortPat < entries[j].sortPat
-	})
-
-	maxLen := 0
-	for _, e := range entries {
-		if l := len(e.pat); l > maxLen {
-			maxLen = l
-		}
-	}
-	format := fmt.Sprintf("  %%-%ds  %%s\n", maxLen)
-	for _, e := range entries {
-		fmt.Fprintf(w, format, e.pat, e.desc)
-	}
 }
 
 // Routes is a convenience entry-point to build routes with a Builder.
