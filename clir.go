@@ -264,6 +264,59 @@ func (r *Router) bestMatch(ctx context.Context, argv []string) (*route, *Request
 	return &r.routes[bestIdx], req, true
 }
 
+func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
+	if len(argv) > len(rt.segments) {
+		return 0, nil
+	}
+	if len(argv) > 32 {
+		return 0, nil
+	}
+
+	params = Params{}
+	for i, arg := range argv {
+		s := rt.segments[i]
+
+		var code uint64
+		switch {
+		case s.lit != "":
+			if arg != s.lit {
+				return 0, nil
+			}
+			code = 0b10
+		case s.param != "":
+			params[s.param] = arg
+			code = 0b01
+		default:
+			return 0, nil
+		}
+
+		shift := uint(2 * (32 - 1 - i))
+		rank |= code << shift
+	}
+
+	return rank, params
+}
+
+func (r *Router) filterDepth(argv []string, maxDepth int) []*route {
+	var out []*route
+	for i := range r.routes {
+		rt := &r.routes[i]
+
+		rank, _ := rt.matchPrefix(argv)
+		if rank == 0 {
+			continue
+		}
+
+		relDepth := len(rt.segments) - len(argv)
+		if relDepth < 0 || relDepth > maxDepth {
+			continue
+		}
+
+		out = append(out, rt)
+	}
+	return out
+}
+
 // Run attempts to match argv against registered routes and executes
 // the first matching handler. ctx becomes the root context for the Request.
 func (r *Router) Run(ctx context.Context, argv []string) error {
