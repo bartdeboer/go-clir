@@ -1,7 +1,6 @@
 package clir
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -134,49 +133,6 @@ func TestRequest_Context_DefaultBackgroundWhenNil(t *testing.T) {
 
 	if gotCtx == nil {
 		t.Fatal("Request.Context returned nil")
-	}
-}
-
-// --- PrintHelp tests ---
-
-func TestRouter_PrintHelp_NoCommands(t *testing.T) {
-	r := New()
-	var buf bytes.Buffer
-
-	r.PrintHelp(&buf)
-	out := buf.String()
-
-	if !strings.Contains(out, "No commands registered.") {
-		t.Fatalf("unexpected help output: %q", out)
-	}
-}
-
-func TestRouter_PrintHelp_WithCommandsSorted(t *testing.T) {
-	r := New()
-
-	r.Handle("beta", "Beta command", func(req *Request) error { return nil })
-	r.Handle("alpha", "Alpha command", func(req *Request) error { return nil })
-	r.Handle("gamma", "Gamma command", func(req *Request) error { return nil })
-
-	var buf bytes.Buffer
-	r.PrintHelp(&buf)
-	out := buf.String()
-
-	if !strings.Contains(out, "Available commands:") {
-		t.Fatalf("help output missing header: %q", out)
-	}
-
-	alphaIdx := strings.Index(out, "alpha")
-	betaIdx := strings.Index(out, "beta")
-	gammaIdx := strings.Index(out, "gamma")
-
-	if alphaIdx == -1 || betaIdx == -1 || gammaIdx == -1 {
-		t.Fatalf("help output missing commands: %q", out)
-	}
-
-	if !(alphaIdx < betaIdx && betaIdx < gammaIdx) {
-		t.Fatalf("commands not sorted: alpha=%d beta=%d gamma=%d\n%q",
-			alphaIdx, betaIdx, gammaIdx, out)
 	}
 }
 

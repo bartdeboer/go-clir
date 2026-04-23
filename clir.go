@@ -32,8 +32,6 @@ package clir
 import (
 	"context"
 	"fmt"
-	"io"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -274,48 +272,6 @@ func (r *Router) Run(ctx context.Context, argv []string) error {
 		return fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
 	}
 	return rt.handler(req)
-}
-
-// PrintHelp prints all registered patterns and their descriptions,
-// sorted alphabetically by pattern.
-func (r *Router) PrintHelp(w io.Writer) {
-	if len(r.routes) == 0 {
-		fmt.Fprintln(w, "No commands registered.")
-		return
-	}
-
-	entries := make([]struct {
-		pat     string
-		sortPat string
-		desc    string
-	}, len(r.routes))
-
-	for i, rt := range r.routes {
-		var sortParts []string
-		for _, s := range rt.segments {
-			if s.lit != "" {
-				sortParts = append(sortParts, fmt.Sprintf("%d %s", s.sort, s.lit))
-			}
-		}
-		entries[i].pat = rt.String()
-		entries[i].sortPat = strings.Join(sortParts, " ")
-		entries[i].desc = rt.desc
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].sortPat < entries[j].sortPat
-	})
-
-	maxLen := 0
-	for _, e := range entries {
-		if l := len(e.pat); l > maxLen {
-			maxLen = l
-		}
-	}
-	format := fmt.Sprintf("  %%-%ds  %%s\n", maxLen)
-	for _, e := range entries {
-		fmt.Fprintf(w, format, e.pat, e.desc)
-	}
 }
 
 // Routes is a convenience entry-point to build routes with a Builder.
