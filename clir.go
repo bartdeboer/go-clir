@@ -356,20 +356,13 @@ func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOpti
 	options := makeResolveOptions(opts...)
 	rt, req, matched := r.bestMatch(ctx, argv)
 
+	if matched && len(req.Extra) == 0 && rt.handler != nil {
+		return commandResolution(rt, req), nil
+	}
+
 	if options.help {
 		scope, all, ok := parseHelpRequest(argv)
 		if ok {
-			if matched &&
-				len(req.Extra) == 0 &&
-				rt.handler != nil {
-				return Resolution{
-					Kind:    ResolutionCommand,
-					Request: req,
-					Handler: rt.handler,
-					route:   rt,
-				}, nil
-			}
-
 			return Resolution{
 				Kind:      ResolutionHelp,
 				HelpScope: append([]string{}, scope...),
@@ -385,12 +378,16 @@ func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOpti
 		return Resolution{}, fmt.Errorf("command `%s` is not executable", strings.Join(argv, " "))
 	}
 
+	return commandResolution(rt, req), nil
+}
+
+func commandResolution(rt *route, req *Request) Resolution {
 	return Resolution{
 		Kind:    ResolutionCommand,
 		Request: req,
 		Handler: rt.handler,
 		route:   rt,
-	}, nil
+	}
 }
 
 func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
