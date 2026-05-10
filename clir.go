@@ -89,6 +89,26 @@ type route struct {
 	segments []segment
 	handler  Handler
 	desc     string
+	hidden   bool
+	tags     []string
+}
+
+// RouteOption configures route metadata used by help/discovery APIs.
+type RouteOption func(*route)
+
+// Hidden marks a route as hidden from help/discovery output by default.
+// Hidden routes still match and run normally.
+func Hidden() RouteOption {
+	return func(rt *route) {
+		rt.hidden = true
+	}
+}
+
+// Tag attaches generic route tags for consumers that want filtered help views.
+func Tag(tags ...string) RouteOption {
+	return func(rt *route) {
+		rt.tags = append(rt.tags, tags...)
+	}
 }
 
 // Router holds all registered routes and can execute them for argv.
@@ -167,15 +187,22 @@ func parseSegments(parts []string) []segment {
 // Example:
 //
 //	r.Handle("comp <component> image build", "Build images", handler)
-func (r *Router) Handle(pattern, desc string, h Handler) {
+func (r *Router) Handle(pattern, desc string, h Handler, opts ...RouteOption) {
 	parts := strings.Fields(pattern)
 	segs := parseSegments(parts)
 
-	r.routes = append(r.routes, route{
+	rt := route{
 		segments: segs,
 		handler:  h,
 		desc:     desc,
-	})
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&rt)
+		}
+	}
+
+	r.routes = append(r.routes, rt)
 }
 
 // 2 bits per segment, left-to-right => early tokens dominate.
@@ -392,7 +419,7 @@ func (b *Builder) With(mws ...Middleware) *Builder {
 //
 //	b.Handle("image build", "Build images", handler)
 //	// pattern: "comp <component> image build"
-func (b *Builder) Handle(path, desc string, h Handler) {
+func (b *Builder) Handle(path, desc string, h Handler, opts ...RouteOption) {
 	parts := strings.Fields(path)
 	full := append(append([]string{}, b.prefix...), parts...)
 	pattern := strings.Join(full, " ")
@@ -403,7 +430,7 @@ func (b *Builder) Handle(path, desc string, h Handler) {
 		wrapped = b.mws[i](wrapped)
 	}
 
-	b.router.Handle(pattern, desc, wrapped)
+	b.router.Handle(pattern, desc, wrapped, opts...)
 }
 
 // ---- Typed context support ----
@@ -453,7 +480,7 @@ func (b *ContextBuilder[T]) With(mws ...Middleware) *ContextBuilder[T] {
 // Handle registers a typed handler under the current prefix + path.
 //
 // The handler receives both the Request and the resolved context T.
-func (b *ContextBuilder[T]) Handle(path, desc string, h ContextHandler[T]) {
+func (b *ContextBuilder[T]) Handle(path, desc string, h ContextHandler[T], opts ...RouteOption) {
 	parts := strings.Fields(path)
 	full := append(append([]string{}, b.base.prefix...), parts...)
 	pattern := strings.Join(full, " ")
@@ -471,7 +498,7 @@ func (b *ContextBuilder[T]) Handle(path, desc string, h ContextHandler[T]) {
 		wrapped = b.base.mws[i](wrapped)
 	}
 
-	b.base.router.Handle(pattern, desc, wrapped)
+	b.base.router.Handle(pattern, desc, wrapped, opts...)
 }
 
 // WithContext lifts an untyped Builder into a typed

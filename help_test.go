@@ -365,6 +365,125 @@ func TestRouter_FRunWithHelp_InlineFormatter(t *testing.T) {
 	}
 }
 
+func TestRouter_HiddenRoute_RunsButIsExcludedFromHelpByDefault(t *testing.T) {
+	r := New()
+
+	var called bool
+	r.Handle("visible", "Visible command", func(req *Request) error { return nil })
+	r.Handle("alias", "Hidden alias", func(req *Request) error {
+		called = true
+		return nil
+	}, Hidden())
+
+	if err := r.Run(context.Background(), []string{"alias"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected hidden route handler to run")
+	}
+
+	var buf bytes.Buffer
+	r.PrintHelp(&buf)
+
+	out := buf.String()
+	if strings.Contains(out, "alias") {
+		t.Fatalf("hidden route should not appear in default help: %q", out)
+	}
+	if !strings.Contains(out, "visible") {
+		t.Fatalf("visible route missing from help: %q", out)
+	}
+}
+
+func TestRouter_PrintHelpWithOptions_CanIncludeHiddenRoutes(t *testing.T) {
+	r := New()
+
+	r.Handle("visible", "Visible command", func(req *Request) error { return nil })
+	r.Handle("alias", "Hidden alias", func(req *Request) error { return nil }, Hidden())
+
+	var buf bytes.Buffer
+	r.PrintHelpWithOptions(&buf, HelpOptions{IncludeHidden: true})
+
+	out := buf.String()
+	if !strings.Contains(out, "alias") {
+		t.Fatalf("hidden route should appear when IncludeHidden is true: %q", out)
+	}
+	if !strings.Contains(out, "visible") {
+		t.Fatalf("visible route missing from help: %q", out)
+	}
+}
+
+func TestRouter_FPrintHelpWithOptions_FiltersContextualHelpByTag(t *testing.T) {
+	r := New()
+	noop := func(req *Request) error { return nil }
+
+	r.Handle("help", "Root help.", noop)
+	r.Handle("status", "Show status", noop, Tag("common"))
+	r.Handle("model list", "List models", noop, Tag("common"))
+	r.Handle("model set <model>", "Set model", noop, Tag("advanced"))
+	r.Handle("refresh", "Legacy refresh alias", noop, Hidden(), Tag("common"))
+
+	commonOnly := HelpOptions{
+		Include: func(info RouteInfo) bool {
+			for _, tag := range info.Tags {
+				if tag == "common" {
+					return true
+				}
+			}
+			return false
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := r.FPrintHelpWithOptions(context.Background(), &buf, []string{"help", "all"}, commonOnly); err != nil {
+		t.Fatalf("FPrintHelpWithOptions returned error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "status") {
+		t.Fatalf("common route missing from help: %q", out)
+	}
+	if !strings.Contains(out, "model list") {
+		t.Fatalf("common nested route missing from help: %q", out)
+	}
+	if strings.Contains(out, "model set") {
+		t.Fatalf("advanced route should be filtered out: %q", out)
+	}
+	if strings.Contains(out, "refresh") {
+		t.Fatalf("hidden route should remain filtered out by default: %q", out)
+	}
+}
+
+func TestBuilder_Handle_AcceptsRouteOptions(t *testing.T) {
+	r := New()
+
+	r.Routes(func(b *Builder) {
+		b.Route("tool", func(b *Builder) {
+			b.Handle("visible", "Visible command", func(req *Request) error { return nil }, Tag("common"))
+			b.Handle("alias", "Hidden alias", func(req *Request) error { return nil }, Hidden())
+		})
+	})
+
+	var buf bytes.Buffer
+	r.PrintHelpWithOptions(&buf, HelpOptions{
+		Include: func(info RouteInfo) bool {
+			for _, tag := range info.Tags {
+				if tag == "common" {
+					return true
+				}
+			}
+			return false
+		},
+	})
+
+	out := buf.String()
+	if !strings.Contains(out, "tool visible") {
+		t.Fatalf("tagged builder route missing from help: %q", out)
+	}
+	if strings.Contains(out, "tool alias") {
+		t.Fatalf("hidden builder route should not appear in help: %q", out)
+	}
+}
+
 func TestRouter_PrintHelp_NoCommands(t *testing.T) {
 	r := New()
 	var buf bytes.Buffer
