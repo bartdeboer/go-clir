@@ -178,9 +178,9 @@ r.PrintHelp(os.Stdout)
 //   hello   Say hello
 ```
 
-## Contextual Help and Group Routes
+## Contextual Help and Describe Metadata
 
-Use `Handle` for executable commands. Use `Group` for non-executable route
+Use `Handle` for executable commands. Use `Describe` for non-executable route
 metadata that should appear in contextual help.
 
 ```go
@@ -188,11 +188,11 @@ r := clir.New()
 
 r.Routes(func(b *clir.Builder) {
     // Root help metadata. This route is not executable.
-    b.Group("help", "Example CLI commands.")
+    b.Describe("help", "Example CLI commands.")
 
-    // Command groups contribute descriptions to help, but do not run.
-    b.Group("comp", "Component commands.")
-    b.Group("comp <component>", "Manage one component.")
+    // Describe routes contribute descriptions to help, but do not run.
+    b.Describe("comp", "Component commands.")
+    b.Describe("comp <component>", "Manage one component.")
 
     // Executable commands.
     b.Handle("comp <component> status", "Show component status", func(req *clir.Request) error {
@@ -217,6 +217,6 @@ _ = r.FRunWithHelp(context.Background(), os.Stdout, []string{"comp", "api", "hel
 // dynamic help for: api
 ```
 
-If `comp <component> help` were registered with `Group` instead of `Handle`,
+If `comp <component> help` were registered with `Describe` instead of `Handle`,
 `FRunWithHelp` would treat `comp api help` as contextual help metadata rather
 than executing it as a command.

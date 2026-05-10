@@ -27,7 +27,7 @@ func TestRouter_Run_UsesResolve(t *testing.T) {
 func TestRouter_FRunWithHelp_UsesResolve(t *testing.T) {
 	r := New()
 
-	r.Group("help", "Root help.")
+	r.Describe("help", "Root help.")
 	r.Handle("status", "Show status", func(req *Request) error { return nil })
 
 	var buf bytes.Buffer
@@ -88,7 +88,7 @@ func TestRouter_Resolve_HelpResult(t *testing.T) {
 func TestRouter_Resolve_ExactExecutableHelpRouteWinsNaturally(t *testing.T) {
 	r := New()
 
-	r.Group("component <component>", "Component root")
+	r.Describe("component <component>", "Component root")
 
 	// Executable routes ending in "help" remain commands when FRunWithHelp /
 	// ResolveHelp sees an exact executable match.
@@ -112,13 +112,49 @@ func TestRouter_Resolve_ExactExecutableHelpRouteWinsNaturally(t *testing.T) {
 	}
 }
 
+func TestRouter_Resolve_ExactExecutableRouteWinsWhenParamValueIsHelp(t *testing.T) {
+	r := New()
+
+	r.Describe("codex model", "Model commands")
+	r.Handle("codex model effort set <effort>", "Set effort", func(req *Request) error { return nil })
+
+	res, err := r.Resolve(context.Background(), []string{"codex", "model", "effort", "set", "help"}, ResolveHelp())
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if res.Kind != ResolutionCommand {
+		t.Fatalf("Kind = %q, want %q", res.Kind, ResolutionCommand)
+	}
+	if got := res.Request.Params["effort"]; got != "help" {
+		t.Fatalf("effort param = %q, want %q", got, "help")
+	}
+}
+
+func TestRouter_Resolve_PrefixMatchWithExtraHelpRendersContextualHelp(t *testing.T) {
+	r := New()
+
+	r.Describe("codex model", "Model commands")
+	r.Handle("codex model list", "List models", func(req *Request) error { return nil })
+
+	res, err := r.Resolve(context.Background(), []string{"codex", "model", "help"}, ResolveHelp())
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if res.Kind != ResolutionHelp {
+		t.Fatalf("Kind = %q, want %q", res.Kind, ResolutionHelp)
+	}
+	if got := strings.Join(res.HelpScope, " "); got != "codex model" {
+		t.Fatalf("HelpScope = %q, want %q", got, "codex model")
+	}
+}
+
 func TestRouter_Resolve_HandlerlessHelpRouteResolvesAsContextualHelp(t *testing.T) {
 	r := New()
 
-	r.Group("component <component>", "Component root")
+	r.Describe("component <component>", "Component root")
 
-	// Handlerless Group routes ending in "help" are help metadata, not commands.
-	r.Group("component <component> help", "Component help metadata")
+	// Handlerless Describe routes ending in "help" are help metadata, not commands.
+	r.Describe("component <component> help", "Component help metadata")
 
 	res, err := r.Resolve(context.Background(), []string{"component", "api", "help"}, ResolveHelp())
 	if err != nil {
@@ -132,10 +168,10 @@ func TestRouter_Resolve_HandlerlessHelpRouteResolvesAsContextualHelp(t *testing.
 	}
 }
 
-func TestRouter_Run_GroupRouteDoesNotExecute(t *testing.T) {
+func TestRouter_Run_DescribeRouteDoesNotExecute(t *testing.T) {
 	r := New()
 
-	r.Group("component <component>", "Component root")
+	r.Describe("component <component>", "Component root")
 
 	err := r.Run(context.Background(), []string{"component", "api"})
 	if err == nil {
@@ -146,11 +182,11 @@ func TestRouter_Run_GroupRouteDoesNotExecute(t *testing.T) {
 	}
 }
 
-func TestRouter_FRunWithHelp_GroupRouteAppearsInContextualHelp(t *testing.T) {
+func TestRouter_FRunWithHelp_DescribeRouteAppearsInContextualHelp(t *testing.T) {
 	r := New()
 
-	r.Group("help", "Root help.")
-	r.Group("component", "Component commands")
+	r.Describe("help", "Root help.")
+	r.Describe("component", "Component commands")
 
 	var buf bytes.Buffer
 	if err := r.FRunWithHelp(context.Background(), &buf, []string{"help"}); err != nil {
@@ -159,17 +195,17 @@ func TestRouter_FRunWithHelp_GroupRouteAppearsInContextualHelp(t *testing.T) {
 
 	out := buf.String()
 	if !strings.Contains(out, "component") {
-		t.Fatalf("missing group route from help: %q", out)
+		t.Fatalf("missing describe route from help: %q", out)
 	}
 	if !strings.Contains(out, "Component commands") {
-		t.Fatalf("missing group route description from help: %q", out)
+		t.Fatalf("missing describe route description from help: %q", out)
 	}
 }
 
-func TestRouter_FRunWithHelp_GroupRouteContributesIntro(t *testing.T) {
+func TestRouter_FRunWithHelp_DescribeRouteContributesIntro(t *testing.T) {
 	r := New()
 
-	r.Group("component <component>", "Manage one component.")
+	r.Describe("component <component>", "Manage one component.")
 	r.Handle("component <component> status", "Show status", func(req *Request) error { return nil })
 
 	var buf bytes.Buffer
@@ -179,7 +215,7 @@ func TestRouter_FRunWithHelp_GroupRouteContributesIntro(t *testing.T) {
 
 	out := buf.String()
 	if !strings.Contains(out, "Manage one component.") {
-		t.Fatalf("missing group intro: %q", out)
+		t.Fatalf("missing describe intro: %q", out)
 	}
 	if !strings.Contains(out, "component <component> status") {
 		t.Fatalf("missing child command: %q", out)

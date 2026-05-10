@@ -231,8 +231,8 @@ func (r *Router) Handle(pattern, desc string, h Handler, opts ...RouteOption) {
 	r.addRoute(pattern, desc, h, opts...)
 }
 
-// Group registers a non-executable route that contributes metadata to help.
-func (r *Router) Group(pattern, desc string, opts ...RouteOption) {
+// Describe registers a non-executable route that contributes metadata to help.
+func (r *Router) Describe(pattern, desc string, opts ...RouteOption) {
 	r.addRoute(pattern, desc, nil, opts...)
 }
 
@@ -361,7 +361,6 @@ func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOpti
 		if ok {
 			if matched &&
 				len(req.Extra) == 0 &&
-				isExplicitHelpRoute(rt) &&
 				rt.handler != nil {
 				return Resolution{
 					Kind:    ResolutionCommand,
@@ -546,12 +545,12 @@ func (b *Builder) Handle(path, desc string, h Handler, opts ...RouteOption) {
 	b.router.Handle(pattern, desc, wrapped, opts...)
 }
 
-// Group registers a non-executable route under the current prefix.
-func (b *Builder) Group(path, desc string, opts ...RouteOption) {
+// Describe registers a non-executable route under the current prefix.
+func (b *Builder) Describe(path, desc string, opts ...RouteOption) {
 	parts := strings.Fields(path)
 	full := append(append([]string{}, b.prefix...), parts...)
 	pattern := strings.Join(full, " ")
-	b.router.Group(pattern, desc, opts...)
+	b.router.Describe(pattern, desc, opts...)
 }
 
 // ---- Typed context support ----
@@ -622,9 +621,9 @@ func (b *ContextBuilder[T]) Handle(path, desc string, h ContextHandler[T], opts 
 	b.base.router.Handle(pattern, desc, wrapped, opts...)
 }
 
-// Group registers a non-executable route under the current typed prefix.
-func (b *ContextBuilder[T]) Group(path, desc string, opts ...RouteOption) {
-	b.base.Group(path, desc, opts...)
+// Describe registers a non-executable route under the current typed prefix.
+func (b *ContextBuilder[T]) Describe(path, desc string, opts ...RouteOption) {
+	b.base.Describe(path, desc, opts...)
 }
 
 // WithContext lifts an untyped Builder into a typed
