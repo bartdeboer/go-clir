@@ -384,6 +384,9 @@ func (r *Router) descendantRoutes(argv []string) []*route {
 			continue
 		}
 
+		// Prefer the most specific prefix match for contextual help so a literal
+		// scope like `thread current help` does not also include parameterized
+		// siblings such as `thread <thread> ...`.
 		if bestRank == 0 || rank > bestRank {
 			bestRank = rank
 			out = out[:0]
