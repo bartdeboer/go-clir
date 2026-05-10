@@ -88,6 +88,7 @@ func TestRouter_Resolve_HelpResult(t *testing.T) {
 func TestRouter_Resolve_CanPreserveExactExecutableHelpRoute(t *testing.T) {
 	r := New()
 
+	r.Handle("component <component>", "Component root", func(req *Request) error { return nil })
 	r.Handle("component <component> help", "Dynamic component help", func(req *Request) error { return nil })
 
 	helpRes, err := r.Resolve(context.Background(), []string{"component", "api", "help"}, ResolveHelp())
@@ -109,6 +110,12 @@ func TestRouter_Resolve_CanPreserveExactExecutableHelpRoute(t *testing.T) {
 	}
 	if commandRes.Kind != ResolutionCommand {
 		t.Fatalf("Kind = %q, want %q", commandRes.Kind, ResolutionCommand)
+	}
+	if commandRes.Request == nil {
+		t.Fatal("command resolution missing Request")
+	}
+	if len(commandRes.Request.Extra) != 0 {
+		t.Fatalf("Extra = %v, want empty", commandRes.Request.Extra)
 	}
 	if got := commandRes.Request.Params["component"]; got != "api" {
 		t.Fatalf("component param = %q, want %q", got, "api")

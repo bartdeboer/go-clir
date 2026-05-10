@@ -354,19 +354,21 @@ func makeResolveOptions(opts ...ResolveOption) resolveOptions {
 // Resolve resolves argv to either an executable command or contextual help.
 func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOption) (Resolution, error) {
 	options := makeResolveOptions(opts...)
+	rt, req, matched := r.bestMatch(ctx, argv)
 
 	if options.help {
 		scope, all, ok := parseHelpRequest(argv)
 		if ok {
-			if options.preserveHelpRoute && !all {
-				if rt, req, ok := r.bestExactHelpMatch(ctx, argv); ok {
-					return Resolution{
-						Kind:    ResolutionCommand,
-						Request: req,
-						Handler: rt.handler,
-						route:   rt,
-					}, nil
-				}
+			if options.preserveHelpRoute &&
+				matched &&
+				len(req.Extra) == 0 &&
+				isExplicitHelpRoute(rt) {
+				return Resolution{
+					Kind:    ResolutionCommand,
+					Request: req,
+					Handler: rt.handler,
+					route:   rt,
+				}, nil
 			}
 
 			return Resolution{
@@ -377,8 +379,7 @@ func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOpti
 		}
 	}
 
-	rt, req, ok := r.bestMatch(ctx, argv)
-	if !ok {
+	if !matched {
 		return Resolution{}, fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
 	}
 
@@ -388,44 +389,6 @@ func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOpti
 		Handler: rt.handler,
 		route:   rt,
 	}, nil
-}
-
-func (r *Router) bestExactHelpMatch(ctx context.Context, argv []string) (*route, *Request, bool) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	var bestRoute *route
-	var bestRank uint64
-	var bestParams Params
-
-	for i := range r.routes {
-		rt := &r.routes[i]
-		if !isExplicitHelpRoute(rt) || len(rt.segments) != len(argv) {
-			continue
-		}
-
-		rank, params := rt.matchArgv(argv)
-		if rank == 0 {
-			continue
-		}
-
-		if bestRoute == nil || rank > bestRank {
-			bestRoute = rt
-			bestRank = rank
-			bestParams = params
-		}
-	}
-
-	if bestRoute == nil {
-		return nil, nil, false
-	}
-
-	return bestRoute, &Request{
-		ctx:    ctx,
-		Args:   argv,
-		Params: bestParams,
-	}, true
 }
 
 func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
