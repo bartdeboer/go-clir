@@ -79,45 +79,15 @@ type Handler func(req *Request) error
 // Middleware wraps a Handler, typically to add logging, auth, etc.
 type Middleware func(Handler) Handler
 
-// ResolutionKind describes what Router.Resolve found for argv.
-type ResolutionKind string
-
-const (
-	// ResolutionCommand means argv resolved to an executable command route.
-	ResolutionCommand ResolutionKind = "command"
-
-	// ResolutionHelp means argv resolved to contextual help.
-	ResolutionHelp ResolutionKind = "help"
-)
-
-// Resolution is the result of resolving argv.
+// Resolution is the result of resolving argv to a route.
 type Resolution struct {
-	Kind ResolutionKind
-
-	// Request is set for command resolutions.
 	Request *Request
 	Handler Handler
 
-	// HelpScope and HelpAll are set for help resolutions.
-	HelpScope []string
-	HelpAll   bool
+	Executable bool
+	Exact      bool
 
 	route *route
-}
-
-// ResolveOption configures one Resolve call.
-type ResolveOption func(*resolveOptions)
-
-type resolveOptions struct {
-	shouldRenderHelp bool
-}
-
-// ShouldRenderHelp allows argv ending in "help" or "help all" to resolve
-// as contextual help so the caller can render it.
-func ShouldRenderHelp() ResolveOption {
-	return func(opts *resolveOptions) {
-		opts.shouldRenderHelp = true
-	}
 }
 
 type segment struct {
@@ -342,52 +312,23 @@ func (r *Router) bestMatch(ctx context.Context, argv []string) (*route, *Request
 	return &r.routes[bestIdx], req, true
 }
 
-func makeResolveOptions(opts ...ResolveOption) resolveOptions {
-	var out resolveOptions
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&out)
-		}
-	}
-	return out
-}
-
-// Resolve resolves argv to either an executable command or contextual help.
-func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOption) (Resolution, error) {
-	options := makeResolveOptions(opts...)
+// Resolve resolves argv to the best matching route without executing it.
+func (r *Router) Resolve(ctx context.Context, argv []string) (Resolution, error) {
 	rt, req, matched := r.bestMatch(ctx, argv)
-
-	if matched && len(req.Extra) == 0 && rt.handler != nil {
-		return commandResolution(rt, req), nil
-	}
-
-	if options.shouldRenderHelp {
-		scope, all, ok := parseHelpRequest(argv)
-		if ok {
-			return Resolution{
-				Kind:      ResolutionHelp,
-				HelpScope: append([]string{}, scope...),
-				HelpAll:   all,
-			}, nil
-		}
-	}
-
 	if !matched {
 		return Resolution{}, fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
 	}
-	if rt.handler == nil {
-		return Resolution{}, fmt.Errorf("command `%s` is not executable", strings.Join(argv, " "))
-	}
 
-	return commandResolution(rt, req), nil
+	return routeResolution(rt, req), nil
 }
 
-func commandResolution(rt *route, req *Request) Resolution {
+func routeResolution(rt *route, req *Request) Resolution {
 	return Resolution{
-		Kind:    ResolutionCommand,
-		Request: req,
-		Handler: rt.handler,
-		route:   rt,
+		Request:    req,
+		Handler:    rt.handler,
+		Executable: rt.handler != nil,
+		Exact:      len(req.Extra) == 0,
+		route:      rt,
 	}
 }
 
@@ -463,8 +404,8 @@ func (r *Router) Run(ctx context.Context, argv []string) error {
 	if err != nil {
 		return err
 	}
-	if res.Kind != ResolutionCommand || res.Handler == nil {
-		return fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
+	if !res.Executable {
+		return fmt.Errorf("command `%s` is not executable", strings.Join(argv, " "))
 	}
 	return res.Handler(res.Request)
 }

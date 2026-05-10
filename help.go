@@ -12,6 +12,12 @@ import (
 const helpToken = "help"
 const helpAllToken = "all"
 
+// HelpRequest is clir's built-in trailing help/help all convention.
+type HelpRequest struct {
+	Scope []string
+	All   bool
+}
+
 // RouteInfo is the stable public representation of a route for help/discovery APIs.
 type RouteInfo struct {
 	Pattern     string
@@ -91,22 +97,21 @@ func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, o
 		w = os.Stdout
 	}
 
-	res, err := r.Resolve(ctx, argv, ShouldRenderHelp())
+	res, err := r.Resolve(ctx, argv)
+	if helpReq, ok := ParseHelpRequest(argv); ok {
+		if err == nil && res.Executable && res.Exact {
+			return res.Handler(res.Request)
+		}
+		return r.printCommandHelp(w, helpReq.Scope, helpReq.All, makeHelpOptions(opts...))
+	}
+
 	if err != nil {
 		return err
 	}
-
-	switch res.Kind {
-	case ResolutionCommand:
-		if res.Handler == nil {
-			return fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
-		}
-		return res.Handler(res.Request)
-	case ResolutionHelp:
-		return r.printCommandHelp(w, res.HelpScope, res.HelpAll, makeHelpOptions(opts...))
-	default:
-		return fmt.Errorf("unsupported resolution kind %q", res.Kind)
+	if !res.Executable {
+		return fmt.Errorf("command `%s` is not executable", strings.Join(argv, " "))
 	}
+	return res.Handler(res.Request)
 }
 
 // FPrintHelp renders contextual help for argv.
@@ -114,25 +119,30 @@ func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, o
 // modifiers. Otherwise argv is treated as the command scope.
 func (r *Router) FPrintHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
 	_ = ctx
-	scope, all, ok := parseHelpRequest(argv)
+	helpReq, ok := ParseHelpRequest(argv)
 	if !ok {
-		scope = argv
-		all = false
+		helpReq = HelpRequest{Scope: append([]string{}, argv...)}
 	}
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, scope, all, makeHelpOptions(opts...))
+	return r.printCommandHelp(w, helpReq.Scope, helpReq.All, makeHelpOptions(opts...))
 }
 
-func parseHelpRequest(argv []string) (scope []string, all bool, ok bool) {
+// ParseHelpRequest parses clir's built-in trailing help/help all convention.
+func ParseHelpRequest(argv []string) (HelpRequest, bool) {
 	switch {
 	case len(argv) >= 2 && argv[len(argv)-2] == helpToken && argv[len(argv)-1] == helpAllToken:
-		return argv[:len(argv)-2], true, true
+		return HelpRequest{
+			Scope: append([]string{}, argv[:len(argv)-2]...),
+			All:   true,
+		}, true
 	case len(argv) >= 1 && argv[len(argv)-1] == helpToken:
-		return argv[:len(argv)-1], false, true
+		return HelpRequest{
+			Scope: append([]string{}, argv[:len(argv)-1]...),
+		}, true
 	default:
-		return nil, false, false
+		return HelpRequest{}, false
 	}
 }
 
