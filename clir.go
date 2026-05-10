@@ -79,6 +79,17 @@ type Handler func(req *Request) error
 // Middleware wraps a Handler, typically to add logging, auth, etc.
 type Middleware func(Handler) Handler
 
+// Resolution is the result of resolving argv to a route.
+type Resolution struct {
+	Request *Request
+	Handler Handler
+
+	Executable bool
+	Exact      bool
+
+	route *route
+}
+
 type segment struct {
 	lit   string // non-empty for static segment: "comp", "image", "build"
 	param string // non-empty for param segment: e.g. "component" for "<component>"
@@ -188,6 +199,15 @@ func parseSegments(parts []string) []segment {
 //
 //	r.Handle("comp <component> image build", "Build images", handler)
 func (r *Router) Handle(pattern, desc string, h Handler, opts ...RouteOption) {
+	r.addRoute(pattern, desc, h, opts...)
+}
+
+// Describe registers a non-executable route that contributes metadata to help.
+func (r *Router) Describe(pattern, desc string, opts ...RouteOption) {
+	r.addRoute(pattern, desc, nil, opts...)
+}
+
+func (r *Router) addRoute(pattern, desc string, h Handler, opts ...RouteOption) {
 	parts := strings.Fields(pattern)
 	segs := parseSegments(parts)
 
@@ -292,6 +312,26 @@ func (r *Router) bestMatch(ctx context.Context, argv []string) (*route, *Request
 	return &r.routes[bestIdx], req, true
 }
 
+// Resolve resolves argv to the best matching route without executing it.
+func (r *Router) Resolve(ctx context.Context, argv []string) (Resolution, error) {
+	rt, req, matched := r.bestMatch(ctx, argv)
+	if !matched {
+		return Resolution{}, fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
+	}
+
+	return routeResolution(rt, req), nil
+}
+
+func routeResolution(rt *route, req *Request) Resolution {
+	return Resolution{
+		Request:    req,
+		Handler:    rt.handler,
+		Executable: rt.handler != nil,
+		Exact:      len(req.Extra) == 0,
+		route:      rt,
+	}
+}
+
 func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
 	if len(argv) == 0 {
 		return 1, Params{}
@@ -330,6 +370,8 @@ func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
 
 func (r *Router) descendantRoutes(argv []string) []*route {
 	var out []*route
+	var bestRank uint64
+
 	for i := range r.routes {
 		rt := &r.routes[i]
 
@@ -342,7 +384,16 @@ func (r *Router) descendantRoutes(argv []string) []*route {
 			continue
 		}
 
-		out = append(out, rt)
+		// Prefer the most specific prefix match for contextual help so a literal
+		// scope like `thread current help` does not also include parameterized
+		// siblings such as `thread <thread> ...`.
+		if bestRank == 0 || rank > bestRank {
+			bestRank = rank
+			out = out[:0]
+		}
+		if rank == bestRank {
+			out = append(out, rt)
+		}
 	}
 
 	sortRoutesForHelp(out)
@@ -352,11 +403,14 @@ func (r *Router) descendantRoutes(argv []string) []*route {
 // Run attempts to match argv against registered routes and executes
 // the first matching handler. ctx becomes the root context for the Request.
 func (r *Router) Run(ctx context.Context, argv []string) error {
-	rt, req, ok := r.bestMatch(ctx, argv)
-	if !ok {
-		return fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
+	res, err := r.Resolve(ctx, argv)
+	if err != nil {
+		return err
 	}
-	return rt.handler(req)
+	if !res.Executable {
+		return fmt.Errorf("command `%s` is not executable", strings.Join(argv, " "))
+	}
+	return res.Handler(res.Request)
 }
 
 // Routes is a convenience entry-point to build routes with a Builder.
@@ -433,6 +487,14 @@ func (b *Builder) Handle(path, desc string, h Handler, opts ...RouteOption) {
 	b.router.Handle(pattern, desc, wrapped, opts...)
 }
 
+// Describe registers a non-executable route under the current prefix.
+func (b *Builder) Describe(path, desc string, opts ...RouteOption) {
+	parts := strings.Fields(path)
+	full := append(append([]string{}, b.prefix...), parts...)
+	pattern := strings.Join(full, " ")
+	b.router.Describe(pattern, desc, opts...)
+}
+
 // ---- Typed context support ----
 
 // Resolver resolves a typed context object T from the Request.
@@ -499,6 +561,11 @@ func (b *ContextBuilder[T]) Handle(path, desc string, h ContextHandler[T], opts 
 	}
 
 	b.base.router.Handle(pattern, desc, wrapped, opts...)
+}
+
+// Describe registers a non-executable route under the current typed prefix.
+func (b *ContextBuilder[T]) Describe(path, desc string, opts ...RouteOption) {
+	b.base.Describe(path, desc, opts...)
 }
 
 // WithContext lifts an untyped Builder into a typed

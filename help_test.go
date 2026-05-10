@@ -68,7 +68,7 @@ func TestRouter_RunWithHelp_RunsCommandWhenNotHelp(t *testing.T) {
 func TestRouter_FRunWithHelp_PrintsContextualHelp(t *testing.T) {
 	r := New()
 
-	r.Handle("comp <component> help", "Manage component commands.", func(req *Request) error { return nil })
+	r.Describe("comp <component> help", "Manage component commands.")
 	r.Handle("comp <component> image", "Image commands", func(req *Request) error { return nil })
 	r.Handle("comp <component> logs", "View logs", func(req *Request) error { return nil })
 
@@ -99,23 +99,23 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 	r := New()
 	noop := func(req *Request) error { return nil }
 
-	r.Handle("help", "Root command help.", noop)
+	r.Describe("help", "Root command help.")
 	r.Handle("comp", "Manage components", noop)
-	r.Handle("comp help", "Manage components in the current deployment.", noop)
+	r.Describe("comp help", "Manage components in the current deployment.")
 	r.Handle("comp list", "List components", noop)
 	r.Handle("comp <component>", "Operate on one component", noop)
-	r.Handle("comp <component> help", "Manage one component.", noop)
+	r.Describe("comp <component> help", "Manage one component.")
 	r.Handle("comp <component> image", "Image commands", noop)
-	r.Handle("comp <component> image help", "Build and publish component images.", noop)
+	r.Describe("comp <component> image help", "Build and publish component images.")
 	r.Handle("comp <component> image build", "Build image", noop)
 	r.Handle("comp <component> image push", "Push image", noop)
 	r.Handle("comp <component> logs", "Stream logs", noop)
 	r.Handle("comp <component> task", "Task commands", noop)
-	r.Handle("comp <component> task help", "Run operational tasks.", noop)
+	r.Describe("comp <component> task help", "Run operational tasks.")
 	r.Handle("comp <component> task list", "List tasks", noop)
 	r.Handle("comp <component> task run", "Run task", noop)
 	r.Handle("env", "Manage environments", noop)
-	r.Handle("env help", "Manage deployment environments.", noop)
+	r.Describe("env help", "Manage deployment environments.")
 	r.Handle("env list", "List environments", noop)
 	r.Handle("env <environment>", "Operate on one environment", noop)
 	r.Handle("env <environment> promote", "Promote environment", noop)
@@ -246,9 +246,9 @@ func TestRouter_FRunWithHelp_ConsolidatesImplicitChildPrefixes(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
-	r.Handle("gcloud help", "Google Cloud commands.", noop)
+	r.Describe("gcloud help", "Google Cloud commands.")
 	r.Handle("gcloud login", "Authenticate with gcloud", noop)
-	r.Handle("gcloud cluster help", "Cluster commands.", noop)
+	r.Describe("gcloud cluster help", "Cluster commands.")
 	r.Handle("gcloud cluster configure", "Configure current cluster context", noop)
 	r.Handle("gcloud cluster create <name>", "Create cluster from configuration", noop)
 	r.Handle("gcloud image <name> upload", "Upload image to remote registry", noop)
@@ -277,10 +277,10 @@ func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
-	r.Handle("tool help", "Tool commands.", noop)
+	r.Describe("tool help", "Tool commands.")
 	r.Handle("tool direct", "Direct command", noop)
-	r.Handle("tool direct help", "Direct help text should not override the command.", noop)
-	r.Handle("tool group help", "Group commands.", noop)
+	r.Describe("tool direct help", "Direct help text should not override the command.")
+	r.Describe("tool group help", "Group commands.")
 	r.Handle("tool group run", "Run group task", noop)
 	r.Handle("tool empty run", "Run empty task", noop)
 
@@ -344,7 +344,7 @@ func TestRouter_FRunWithHelp_InlineFormatter(t *testing.T) {
 	r := New()
 	r.SetHelpEntryFormatter(WriteHelpInline)
 
-	r.Handle("help", "Root help.", func(req *Request) error { return nil })
+	r.Describe("help", "Root help.")
 	r.Handle("alpha", "Alpha command", func(req *Request) error { return nil })
 	r.Handle("beta", "Beta command", func(req *Request) error { return nil })
 
@@ -416,7 +416,7 @@ func TestRouter_FPrintHelp_FiltersContextualHelpByTag(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
-	r.Handle("help", "Root help.", noop)
+	r.Describe("help", "Root help.")
 	r.Handle("status", "Show status", noop, Tag("common"))
 	r.Handle("model list", "List models", noop, Tag("common"))
 	r.Handle("model set <model>", "Set model", noop, Tag("advanced"))
