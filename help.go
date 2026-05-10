@@ -176,6 +176,9 @@ func isExplicitHelpRoute(rt *route) bool {
 
 func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts helpOptions) error {
 	helpRoute, hasHelpRoute := r.bestHelpRoute(append(append([]string{}, scope...), helpToken))
+	if !hasHelpRoute {
+		helpRoute, hasHelpRoute = r.bestScopeRoute(scope)
+	}
 
 	entries := r.helpEntries(scope, all, opts)
 
@@ -198,6 +201,14 @@ func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts he
 	fmt.Fprintln(w, "Available commands:")
 	r.writeHelpEntries(w, entries)
 	return nil
+}
+
+func (r *Router) bestScopeRoute(scope []string) (*route, bool) {
+	rt, req, ok := r.bestMatch(context.Background(), scope)
+	if !ok || len(req.Extra) != 0 || rt.handler != nil {
+		return nil, false
+	}
+	return rt, true
 }
 
 func (r *Router) helpEntries(scope []string, all bool, opts helpOptions) []RouteInfo {

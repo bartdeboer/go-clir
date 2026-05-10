@@ -109,22 +109,13 @@ type Resolution struct {
 type ResolveOption func(*resolveOptions)
 
 type resolveOptions struct {
-	help              bool
-	preserveHelpRoute bool
+	help bool
 }
 
 // ResolveHelp allows argv ending in "help" or "help all" to resolve as help.
 func ResolveHelp() ResolveOption {
 	return func(opts *resolveOptions) {
 		opts.help = true
-	}
-}
-
-// PreserveHelpCommand keeps an exact executable route ending in literal "help"
-// as a command, even when ResolveHelp is enabled.
-func PreserveHelpCommand() ResolveOption {
-	return func(opts *resolveOptions) {
-		opts.preserveHelpRoute = true
 	}
 }
 
@@ -237,6 +228,15 @@ func parseSegments(parts []string) []segment {
 //
 //	r.Handle("comp <component> image build", "Build images", handler)
 func (r *Router) Handle(pattern, desc string, h Handler, opts ...RouteOption) {
+	r.addRoute(pattern, desc, h, opts...)
+}
+
+// Group registers a non-executable route that contributes metadata to help.
+func (r *Router) Group(pattern, desc string, opts ...RouteOption) {
+	r.addRoute(pattern, desc, nil, opts...)
+}
+
+func (r *Router) addRoute(pattern, desc string, h Handler, opts ...RouteOption) {
 	parts := strings.Fields(pattern)
 	segs := parseSegments(parts)
 
@@ -359,10 +359,10 @@ func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOpti
 	if options.help {
 		scope, all, ok := parseHelpRequest(argv)
 		if ok {
-			if options.preserveHelpRoute &&
-				matched &&
+			if matched &&
 				len(req.Extra) == 0 &&
-				isExplicitHelpRoute(rt) {
+				isExplicitHelpRoute(rt) &&
+				rt.handler != nil {
 				return Resolution{
 					Kind:    ResolutionCommand,
 					Request: req,
@@ -381,6 +381,9 @@ func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOpti
 
 	if !matched {
 		return Resolution{}, fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
+	}
+	if rt.handler == nil {
+		return Resolution{}, fmt.Errorf("command `%s` is not executable", strings.Join(argv, " "))
 	}
 
 	return Resolution{
@@ -543,6 +546,14 @@ func (b *Builder) Handle(path, desc string, h Handler, opts ...RouteOption) {
 	b.router.Handle(pattern, desc, wrapped, opts...)
 }
 
+// Group registers a non-executable route under the current prefix.
+func (b *Builder) Group(path, desc string, opts ...RouteOption) {
+	parts := strings.Fields(path)
+	full := append(append([]string{}, b.prefix...), parts...)
+	pattern := strings.Join(full, " ")
+	b.router.Group(pattern, desc, opts...)
+}
+
 // ---- Typed context support ----
 
 // Resolver resolves a typed context object T from the Request.
@@ -609,6 +620,11 @@ func (b *ContextBuilder[T]) Handle(path, desc string, h ContextHandler[T], opts 
 	}
 
 	b.base.router.Handle(pattern, desc, wrapped, opts...)
+}
+
+// Group registers a non-executable route under the current typed prefix.
+func (b *ContextBuilder[T]) Group(path, desc string, opts ...RouteOption) {
+	b.base.Group(path, desc, opts...)
 }
 
 // WithContext lifts an untyped Builder into a typed
