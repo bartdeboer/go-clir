@@ -20,14 +20,37 @@ type RouteInfo struct {
 	Tags        []string
 }
 
-// HelpOptions filters help/discovery output.
-type HelpOptions struct {
-	// IncludeHidden includes routes marked Hidden.
-	IncludeHidden bool
+// HasTag reports whether the route has tag.
+func (r RouteInfo) HasTag(tag string) bool {
+	for _, t := range r.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
 
-	// Include can apply arbitrary consumer-owned filtering.
-	// It runs after the default hidden-route filter.
-	Include func(RouteInfo) bool
+// HelpOption configures one help rendering call.
+type HelpOption func(*helpOptions)
+
+type helpOptions struct {
+	includeHidden bool
+	filter        func(RouteInfo) bool
+}
+
+// IncludeHidden includes routes marked Hidden in help output.
+func IncludeHidden() HelpOption {
+	return func(opts *helpOptions) {
+		opts.includeHidden = true
+	}
+}
+
+// FilterHelp applies arbitrary consumer-owned filtering to help output.
+// It runs after the default hidden-route filter.
+func FilterHelp(fn func(RouteInfo) bool) HelpOption {
+	return func(opts *helpOptions) {
+		opts.filter = fn
+	}
 }
 
 // HelpEntryFormatter writes the command entries in a help listing.
@@ -63,12 +86,7 @@ func (r *Router) RunWithHelp(ctx context.Context, argv []string) error {
 
 // FRunWithHelp behaves like Run, but if argv ends with "help" or "help all"
 // it renders contextual help for that command path instead of running a handler.
-func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string) error {
-	return r.FRunWithHelpOptions(ctx, w, argv, HelpOptions{})
-}
-
-// FRunWithHelpOptions is FRunWithHelp with filtered help output.
-func (r *Router) FRunWithHelpOptions(ctx context.Context, w io.Writer, argv []string, opts HelpOptions) error {
+func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
 	scope, all, ok := parseHelpRequest(argv)
 	if !ok {
 		return r.Run(ctx, argv)
@@ -76,13 +94,13 @@ func (r *Router) FRunWithHelpOptions(ctx context.Context, w io.Writer, argv []st
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, scope, all, opts)
+	return r.printCommandHelp(w, scope, all, makeHelpOptions(opts...))
 }
 
-// FPrintHelpWithOptions renders contextual help for argv with filtered output.
+// FPrintHelp renders contextual help for argv.
 // If argv ends with "help" or "help all", those tokens are interpreted as help
 // modifiers. Otherwise argv is treated as the command scope.
-func (r *Router) FPrintHelpWithOptions(ctx context.Context, w io.Writer, argv []string, opts HelpOptions) error {
+func (r *Router) FPrintHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
 	_ = ctx
 	scope, all, ok := parseHelpRequest(argv)
 	if !ok {
@@ -92,7 +110,7 @@ func (r *Router) FPrintHelpWithOptions(ctx context.Context, w io.Writer, argv []
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, scope, all, opts)
+	return r.printCommandHelp(w, scope, all, makeHelpOptions(opts...))
 }
 
 func parseHelpRequest(argv []string) (scope []string, all bool, ok bool) {
@@ -144,7 +162,7 @@ func isExplicitHelpRoute(rt *route) bool {
 	return last.lit == helpToken
 }
 
-func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts HelpOptions) error {
+func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts helpOptions) error {
 	helpRoute, hasHelpRoute := r.bestHelpRoute(append(append([]string{}, scope...), helpToken))
 
 	entries := r.helpEntries(scope, all, opts)
@@ -170,7 +188,7 @@ func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts He
 	return nil
 }
 
-func (r *Router) helpEntries(scope []string, all bool, opts HelpOptions) []RouteInfo {
+func (r *Router) helpEntries(scope []string, all bool, opts helpOptions) []RouteInfo {
 	descendants := r.descendantRoutes(scope)
 	if all {
 		return sortedRouteInfos(filterOutHelpRoutes(descendants), opts)
@@ -179,13 +197,7 @@ func (r *Router) helpEntries(scope []string, all bool, opts HelpOptions) []Route
 }
 
 // PrintHelp prints all registered patterns and their descriptions.
-func (r *Router) PrintHelp(w io.Writer) {
-	r.PrintHelpWithOptions(w, HelpOptions{})
-}
-
-// PrintHelpWithOptions prints all registered patterns and their descriptions,
-// filtered by opts.
-func (r *Router) PrintHelpWithOptions(w io.Writer, opts HelpOptions) {
+func (r *Router) PrintHelp(w io.Writer, opts ...HelpOption) {
 	if len(r.routes) == 0 {
 		fmt.Fprintln(w, "No commands registered.")
 		return
@@ -197,7 +209,7 @@ func (r *Router) PrintHelpWithOptions(w io.Writer, opts HelpOptions) {
 	}
 	sortRoutesForHelp(all)
 
-	r.writeHelpEntries(w, sortedRouteInfos(all, opts))
+	r.writeHelpEntries(w, sortedRouteInfos(all, makeHelpOptions(opts...)))
 }
 
 func filterOutHelpRoutes(routes []*route) []*route {
@@ -210,7 +222,7 @@ func filterOutHelpRoutes(routes []*route) []*route {
 	return out
 }
 
-func consolidateHelpRoutes(scope []string, routes []*route, level int, opts HelpOptions) []RouteInfo {
+func consolidateHelpRoutes(scope []string, routes []*route, level int, opts helpOptions) []RouteInfo {
 	if level <= 0 {
 		return nil
 	}
@@ -284,7 +296,7 @@ func (r *Router) writeHelpEntries(w io.Writer, entries []RouteInfo) {
 	r.helpEntryWriter()(w, entries)
 }
 
-func sortedRouteInfos(routes []*route, opts HelpOptions) []RouteInfo {
+func sortedRouteInfos(routes []*route, opts helpOptions) []RouteInfo {
 	entries := make([]struct {
 		pat     string
 		sortPat string
@@ -332,11 +344,21 @@ func sortedRouteInfos(routes []*route, opts HelpOptions) []RouteInfo {
 	return out
 }
 
-func (opts HelpOptions) include(info RouteInfo) bool {
-	if info.Hidden && !opts.IncludeHidden {
+func makeHelpOptions(opts ...HelpOption) helpOptions {
+	var out helpOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
+	}
+	return out
+}
+
+func (opts helpOptions) include(info RouteInfo) bool {
+	if info.Hidden && !opts.includeHidden {
 		return false
 	}
-	if opts.Include != nil && !opts.Include(info) {
+	if opts.filter != nil && !opts.filter(info) {
 		return false
 	}
 	return true

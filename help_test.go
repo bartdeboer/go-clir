@@ -394,14 +394,14 @@ func TestRouter_HiddenRoute_RunsButIsExcludedFromHelpByDefault(t *testing.T) {
 	}
 }
 
-func TestRouter_PrintHelpWithOptions_CanIncludeHiddenRoutes(t *testing.T) {
+func TestRouter_PrintHelp_CanIncludeHiddenRoutes(t *testing.T) {
 	r := New()
 
 	r.Handle("visible", "Visible command", func(req *Request) error { return nil })
 	r.Handle("alias", "Hidden alias", func(req *Request) error { return nil }, Hidden())
 
 	var buf bytes.Buffer
-	r.PrintHelpWithOptions(&buf, HelpOptions{IncludeHidden: true})
+	r.PrintHelp(&buf, IncludeHidden())
 
 	out := buf.String()
 	if !strings.Contains(out, "alias") {
@@ -412,7 +412,7 @@ func TestRouter_PrintHelpWithOptions_CanIncludeHiddenRoutes(t *testing.T) {
 	}
 }
 
-func TestRouter_FPrintHelpWithOptions_FiltersContextualHelpByTag(t *testing.T) {
+func TestRouter_FPrintHelp_FiltersContextualHelpByTag(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
@@ -422,20 +422,13 @@ func TestRouter_FPrintHelpWithOptions_FiltersContextualHelpByTag(t *testing.T) {
 	r.Handle("model set <model>", "Set model", noop, Tag("advanced"))
 	r.Handle("refresh", "Legacy refresh alias", noop, Hidden(), Tag("common"))
 
-	commonOnly := HelpOptions{
-		Include: func(info RouteInfo) bool {
-			for _, tag := range info.Tags {
-				if tag == "common" {
-					return true
-				}
-			}
-			return false
-		},
-	}
+	commonOnly := FilterHelp(func(info RouteInfo) bool {
+		return info.HasTag("common")
+	})
 
 	var buf bytes.Buffer
-	if err := r.FPrintHelpWithOptions(context.Background(), &buf, []string{"help", "all"}, commonOnly); err != nil {
-		t.Fatalf("FPrintHelpWithOptions returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, []string{"help", "all"}, commonOnly); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 
 	out := buf.String()
@@ -464,16 +457,9 @@ func TestBuilder_Handle_AcceptsRouteOptions(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	r.PrintHelpWithOptions(&buf, HelpOptions{
-		Include: func(info RouteInfo) bool {
-			for _, tag := range info.Tags {
-				if tag == "common" {
-					return true
-				}
-			}
-			return false
-		},
-	})
+	r.PrintHelp(&buf, FilterHelp(func(info RouteInfo) bool {
+		return info.HasTag("common")
+	}))
 
 	out := buf.String()
 	if !strings.Contains(out, "tool visible") {
