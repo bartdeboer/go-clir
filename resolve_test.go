@@ -70,7 +70,7 @@ func TestRouter_Resolve_CommandResult(t *testing.T) {
 func TestRouter_Resolve_HelpResult(t *testing.T) {
 	r := New()
 
-	res, err := r.Resolve(context.Background(), []string{"component", "api", "help", "all"}, ResolveHelp())
+	res, err := r.Resolve(context.Background(), []string{"component", "api", "help", "all"}, ShouldRenderHelp())
 	if err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
@@ -91,10 +91,10 @@ func TestRouter_Resolve_ExactExecutableHelpRouteWinsNaturally(t *testing.T) {
 	r.Describe("component <component>", "Component root")
 
 	// Executable routes ending in "help" remain commands when FRunWithHelp /
-	// ResolveHelp sees an exact executable match.
+	// ShouldRenderHelp sees an exact executable match.
 	r.Handle("component <component> help", "Dynamic component help", func(req *Request) error { return nil })
 
-	commandRes, err := r.Resolve(context.Background(), []string{"component", "api", "help"}, ResolveHelp())
+	commandRes, err := r.Resolve(context.Background(), []string{"component", "api", "help"}, ShouldRenderHelp())
 	if err != nil {
 		t.Fatalf("Resolve command returned error: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestRouter_Resolve_ExactExecutableRouteWinsWhenParamValueIsHelp(t *testing.
 	r.Describe("codex model", "Model commands")
 	r.Handle("codex model effort set <effort>", "Set effort", func(req *Request) error { return nil })
 
-	res, err := r.Resolve(context.Background(), []string{"codex", "model", "effort", "set", "help"}, ResolveHelp())
+	res, err := r.Resolve(context.Background(), []string{"codex", "model", "effort", "set", "help"}, ShouldRenderHelp())
 	if err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestRouter_Resolve_PrefixMatchWithExtraHelpRendersContextualHelp(t *testing
 	r.Describe("codex model", "Model commands")
 	r.Handle("codex model list", "List models", func(req *Request) error { return nil })
 
-	res, err := r.Resolve(context.Background(), []string{"codex", "model", "help"}, ResolveHelp())
+	res, err := r.Resolve(context.Background(), []string{"codex", "model", "help"}, ShouldRenderHelp())
 	if err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestRouter_Resolve_HandlerlessHelpRouteResolvesAsContextualHelp(t *testing.
 	// Handlerless Describe routes ending in "help" are help metadata, not commands.
 	r.Describe("component <component> help", "Component help metadata")
 
-	res, err := r.Resolve(context.Background(), []string{"component", "api", "help"}, ResolveHelp())
+	res, err := r.Resolve(context.Background(), []string{"component", "api", "help"}, ShouldRenderHelp())
 	if err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
 	}

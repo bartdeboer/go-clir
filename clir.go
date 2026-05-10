@@ -109,13 +109,14 @@ type Resolution struct {
 type ResolveOption func(*resolveOptions)
 
 type resolveOptions struct {
-	help bool
+	shouldRenderHelp bool
 }
 
-// ResolveHelp allows argv ending in "help" or "help all" to resolve as help.
-func ResolveHelp() ResolveOption {
+// ShouldRenderHelp allows argv ending in "help" or "help all" to resolve
+// as contextual help so the caller can render it.
+func ShouldRenderHelp() ResolveOption {
 	return func(opts *resolveOptions) {
-		opts.help = true
+		opts.shouldRenderHelp = true
 	}
 }
 
@@ -360,7 +361,7 @@ func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOpti
 		return commandResolution(rt, req), nil
 	}
 
-	if options.help {
+	if options.shouldRenderHelp {
 		scope, all, ok := parseHelpRequest(argv)
 		if ok {
 			return Resolution{

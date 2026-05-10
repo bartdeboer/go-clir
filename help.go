@@ -91,7 +91,7 @@ func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, o
 		w = os.Stdout
 	}
 
-	res, err := r.Resolve(ctx, argv, ResolveHelp())
+	res, err := r.Resolve(ctx, argv, ShouldRenderHelp())
 	if err != nil {
 		return err
 	}
