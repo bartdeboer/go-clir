@@ -89,6 +89,9 @@ func TestRouter_Resolve_ExactExecutableHelpRouteWinsNaturally(t *testing.T) {
 	r := New()
 
 	r.Group("component <component>", "Component root")
+
+	// Executable routes ending in "help" remain commands when FRunWithHelp /
+	// ResolveHelp sees an exact executable match.
 	r.Handle("component <component> help", "Dynamic component help", func(req *Request) error { return nil })
 
 	commandRes, err := r.Resolve(context.Background(), []string{"component", "api", "help"}, ResolveHelp())
@@ -113,6 +116,8 @@ func TestRouter_Resolve_HandlerlessHelpRouteResolvesAsContextualHelp(t *testing.
 	r := New()
 
 	r.Group("component <component>", "Component root")
+
+	// Handlerless Group routes ending in "help" are help metadata, not commands.
 	r.Group("component <component> help", "Component help metadata")
 
 	res, err := r.Resolve(context.Background(), []string{"component", "api", "help"}, ResolveHelp())
