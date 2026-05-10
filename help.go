@@ -16,6 +16,41 @@ const helpAllToken = "all"
 type RouteInfo struct {
 	Pattern     string
 	Description string
+	Hidden      bool
+	Tags        []string
+}
+
+// HasTag reports whether the route has tag.
+func (r RouteInfo) HasTag(tag string) bool {
+	for _, t := range r.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// HelpOption configures one help rendering call.
+type HelpOption func(*helpOptions)
+
+type helpOptions struct {
+	includeHidden bool
+	filter        func(RouteInfo) bool
+}
+
+// IncludeHidden includes routes marked Hidden in help output.
+func IncludeHidden() HelpOption {
+	return func(opts *helpOptions) {
+		opts.includeHidden = true
+	}
+}
+
+// FilterHelp applies arbitrary consumer-owned filtering to help output.
+// It runs after the default hidden-route filter.
+func FilterHelp(fn func(RouteInfo) bool) HelpOption {
+	return func(opts *helpOptions) {
+		opts.filter = fn
+	}
 }
 
 // HelpEntryFormatter writes the command entries in a help listing.
@@ -38,15 +73,9 @@ func routeInfo(rt *route) RouteInfo {
 	return RouteInfo{
 		Pattern:     rt.String(),
 		Description: rt.desc,
+		Hidden:      rt.hidden,
+		Tags:        append([]string{}, rt.tags...),
 	}
-}
-
-func routeInfos(routes []*route) []RouteInfo {
-	out := make([]RouteInfo, len(routes))
-	for i, rt := range routes {
-		out[i] = routeInfo(rt)
-	}
-	return out
 }
 
 // RunWithHelp is the convenience form requested originally.
@@ -57,7 +86,7 @@ func (r *Router) RunWithHelp(ctx context.Context, argv []string) error {
 
 // FRunWithHelp behaves like Run, but if argv ends with "help" or "help all"
 // it renders contextual help for that command path instead of running a handler.
-func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string) error {
+func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
 	scope, all, ok := parseHelpRequest(argv)
 	if !ok {
 		return r.Run(ctx, argv)
@@ -65,7 +94,23 @@ func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string) e
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, scope, all)
+	return r.printCommandHelp(w, scope, all, makeHelpOptions(opts...))
+}
+
+// FPrintHelp renders contextual help for argv.
+// If argv ends with "help" or "help all", those tokens are interpreted as help
+// modifiers. Otherwise argv is treated as the command scope.
+func (r *Router) FPrintHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
+	_ = ctx
+	scope, all, ok := parseHelpRequest(argv)
+	if !ok {
+		scope = argv
+		all = false
+	}
+	if w == nil {
+		w = os.Stdout
+	}
+	return r.printCommandHelp(w, scope, all, makeHelpOptions(opts...))
 }
 
 func parseHelpRequest(argv []string) (scope []string, all bool, ok bool) {
@@ -117,10 +162,10 @@ func isExplicitHelpRoute(rt *route) bool {
 	return last.lit == helpToken
 }
 
-func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool) error {
+func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts helpOptions) error {
 	helpRoute, hasHelpRoute := r.bestHelpRoute(append(append([]string{}, scope...), helpToken))
 
-	entries := r.helpEntries(scope, all)
+	entries := r.helpEntries(scope, all, opts)
 
 	if !hasHelpRoute && len(entries) == 0 {
 		return fmt.Errorf("no help available for `%s`", strings.Join(scope, " "))
@@ -143,16 +188,16 @@ func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool) error {
 	return nil
 }
 
-func (r *Router) helpEntries(scope []string, all bool) []RouteInfo {
+func (r *Router) helpEntries(scope []string, all bool, opts helpOptions) []RouteInfo {
 	descendants := r.descendantRoutes(scope)
 	if all {
-		return sortedRouteInfos(filterOutHelpRoutes(descendants))
+		return sortedRouteInfos(filterOutHelpRoutes(descendants), opts)
 	}
-	return consolidateHelpRoutes(scope, descendants, 1)
+	return consolidateHelpRoutes(scope, descendants, 1, opts)
 }
 
 // PrintHelp prints all registered patterns and their descriptions.
-func (r *Router) PrintHelp(w io.Writer) {
+func (r *Router) PrintHelp(w io.Writer, opts ...HelpOption) {
 	if len(r.routes) == 0 {
 		fmt.Fprintln(w, "No commands registered.")
 		return
@@ -164,7 +209,7 @@ func (r *Router) PrintHelp(w io.Writer) {
 	}
 	sortRoutesForHelp(all)
 
-	r.writeHelpEntries(w, sortedRouteInfos(all))
+	r.writeHelpEntries(w, sortedRouteInfos(all, makeHelpOptions(opts...)))
 }
 
 func filterOutHelpRoutes(routes []*route) []*route {
@@ -177,7 +222,7 @@ func filterOutHelpRoutes(routes []*route) []*route {
 	return out
 }
 
-func consolidateHelpRoutes(scope []string, routes []*route, level int) []RouteInfo {
+func consolidateHelpRoutes(scope []string, routes []*route, level int, opts helpOptions) []RouteInfo {
 	if level <= 0 {
 		return nil
 	}
@@ -186,6 +231,10 @@ func consolidateHelpRoutes(scope []string, routes []*route, level int) []RouteIn
 	entries := map[string]*route{}
 
 	for _, rt := range routes {
+		if !opts.include(routeInfo(rt)) {
+			continue
+		}
+
 		relDepth := len(rt.segments) - len(scope)
 		if relDepth <= 0 {
 			continue
@@ -231,13 +280,15 @@ func consolidateHelpRoutes(scope []string, routes []*route, level int) []RouteIn
 	for _, entry := range entries {
 		out = append(out, entry)
 	}
-	return sortedRouteInfos(out)
+	return sortedRouteInfos(out, opts)
 }
 
 func routePrefix(rt *route, n int) *route {
 	return &route{
 		segments: append([]segment{}, rt.segments[:n]...),
 		desc:     rt.desc,
+		hidden:   rt.hidden,
+		tags:     append([]string{}, rt.tags...),
 	}
 }
 
@@ -245,17 +296,33 @@ func (r *Router) writeHelpEntries(w io.Writer, entries []RouteInfo) {
 	r.helpEntryWriter()(w, entries)
 }
 
-func sortedRouteInfos(routes []*route) []RouteInfo {
+func sortedRouteInfos(routes []*route, opts helpOptions) []RouteInfo {
 	entries := make([]struct {
 		pat     string
 		sortPat string
 		desc    string
-	}, len(routes))
+		hidden  bool
+		tags    []string
+	}, 0, len(routes))
 
-	for i, rt := range routes {
-		entries[i].pat = rt.String()
-		entries[i].sortPat = helpSortKey(rt)
-		entries[i].desc = rt.desc
+	for _, rt := range routes {
+		info := routeInfo(rt)
+		if !opts.include(info) {
+			continue
+		}
+		entries = append(entries, struct {
+			pat     string
+			sortPat string
+			desc    string
+			hidden  bool
+			tags    []string
+		}{
+			pat:     info.Pattern,
+			sortPat: helpSortKey(rt),
+			desc:    info.Description,
+			hidden:  info.Hidden,
+			tags:    info.Tags,
+		})
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -270,9 +337,31 @@ func sortedRouteInfos(routes []*route) []RouteInfo {
 		out[i] = RouteInfo{
 			Pattern:     e.pat,
 			Description: e.desc,
+			Hidden:      e.hidden,
+			Tags:        append([]string{}, e.tags...),
 		}
 	}
 	return out
+}
+
+func makeHelpOptions(opts ...HelpOption) helpOptions {
+	var out helpOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
+	}
+	return out
+}
+
+func (opts helpOptions) include(info RouteInfo) bool {
+	if info.Hidden && !opts.includeHidden {
+		return false
+	}
+	if opts.filter != nil && !opts.filter(info) {
+		return false
+	}
+	return true
 }
 
 // WriteHelpColumns writes command entries as the default aligned two-column list.
