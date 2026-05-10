@@ -12,6 +12,12 @@ import (
 const helpToken = "help"
 const helpAllToken = "all"
 
+// HelpRequest is clir's built-in trailing help/help all convention.
+type HelpRequest struct {
+	Scope []string
+	All   bool
+}
+
 // RouteInfo is the stable public representation of a route for help/discovery APIs.
 type RouteInfo struct {
 	Pattern     string
@@ -87,14 +93,25 @@ func (r *Router) RunWithHelp(ctx context.Context, argv []string) error {
 // FRunWithHelp behaves like Run, but if argv ends with "help" or "help all"
 // it renders contextual help for that command path instead of running a handler.
 func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
-	scope, all, ok := parseHelpRequest(argv)
-	if !ok {
-		return r.Run(ctx, argv)
-	}
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, scope, all, makeHelpOptions(opts...))
+
+	res, err := r.Resolve(ctx, argv)
+	if helpReq, ok := ParseHelpRequest(argv); ok {
+		if err == nil && res.Executable && res.Exact {
+			return res.Handler(res.Request)
+		}
+		return r.printCommandHelp(w, helpReq.Scope, helpReq.All, makeHelpOptions(opts...))
+	}
+
+	if err != nil {
+		return err
+	}
+	if !res.Executable {
+		return fmt.Errorf("command `%s` is not executable", strings.Join(argv, " "))
+	}
+	return res.Handler(res.Request)
 }
 
 // FPrintHelp renders contextual help for argv.
@@ -102,25 +119,30 @@ func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, o
 // modifiers. Otherwise argv is treated as the command scope.
 func (r *Router) FPrintHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
 	_ = ctx
-	scope, all, ok := parseHelpRequest(argv)
+	helpReq, ok := ParseHelpRequest(argv)
 	if !ok {
-		scope = argv
-		all = false
+		helpReq = HelpRequest{Scope: append([]string{}, argv...)}
 	}
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, scope, all, makeHelpOptions(opts...))
+	return r.printCommandHelp(w, helpReq.Scope, helpReq.All, makeHelpOptions(opts...))
 }
 
-func parseHelpRequest(argv []string) (scope []string, all bool, ok bool) {
+// ParseHelpRequest parses clir's built-in trailing help/help all convention.
+func ParseHelpRequest(argv []string) (HelpRequest, bool) {
 	switch {
 	case len(argv) >= 2 && argv[len(argv)-2] == helpToken && argv[len(argv)-1] == helpAllToken:
-		return argv[:len(argv)-2], true, true
+		return HelpRequest{
+			Scope: append([]string{}, argv[:len(argv)-2]...),
+			All:   true,
+		}, true
 	case len(argv) >= 1 && argv[len(argv)-1] == helpToken:
-		return argv[:len(argv)-1], false, true
+		return HelpRequest{
+			Scope: append([]string{}, argv[:len(argv)-1]...),
+		}, true
 	default:
-		return nil, false, false
+		return HelpRequest{}, false
 	}
 }
 
@@ -164,6 +186,9 @@ func isExplicitHelpRoute(rt *route) bool {
 
 func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts helpOptions) error {
 	helpRoute, hasHelpRoute := r.bestHelpRoute(append(append([]string{}, scope...), helpToken))
+	if !hasHelpRoute {
+		helpRoute, hasHelpRoute = r.bestScopeRoute(scope)
+	}
 
 	entries := r.helpEntries(scope, all, opts)
 
@@ -186,6 +211,14 @@ func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts he
 	fmt.Fprintln(w, "Available commands:")
 	r.writeHelpEntries(w, entries)
 	return nil
+}
+
+func (r *Router) bestScopeRoute(scope []string) (*route, bool) {
+	rt, req, ok := r.bestMatch(context.Background(), scope)
+	if !ok || len(req.Extra) != 0 || rt.handler != nil {
+		return nil, false
+	}
+	return rt, true
 }
 
 func (r *Router) helpEntries(scope []string, all bool, opts helpOptions) []RouteInfo {
