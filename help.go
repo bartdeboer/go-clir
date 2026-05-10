@@ -87,14 +87,26 @@ func (r *Router) RunWithHelp(ctx context.Context, argv []string) error {
 // FRunWithHelp behaves like Run, but if argv ends with "help" or "help all"
 // it renders contextual help for that command path instead of running a handler.
 func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
-	scope, all, ok := parseHelpRequest(argv)
-	if !ok {
-		return r.Run(ctx, argv)
-	}
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, scope, all, makeHelpOptions(opts...))
+
+	res, err := r.Resolve(ctx, argv, ResolveHelp())
+	if err != nil {
+		return err
+	}
+
+	switch res.Kind {
+	case ResolutionCommand:
+		if res.Handler == nil {
+			return fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
+		}
+		return res.Handler(res.Request)
+	case ResolutionHelp:
+		return r.printCommandHelp(w, res.HelpScope, res.HelpAll, makeHelpOptions(opts...))
+	default:
+		return fmt.Errorf("unsupported resolution kind %q", res.Kind)
+	}
 }
 
 // FPrintHelp renders contextual help for argv.

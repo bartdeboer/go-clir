@@ -79,6 +79,55 @@ type Handler func(req *Request) error
 // Middleware wraps a Handler, typically to add logging, auth, etc.
 type Middleware func(Handler) Handler
 
+// ResolutionKind describes what Router.Resolve found for argv.
+type ResolutionKind string
+
+const (
+	// ResolutionCommand means argv resolved to an executable command route.
+	ResolutionCommand ResolutionKind = "command"
+
+	// ResolutionHelp means argv resolved to contextual help.
+	ResolutionHelp ResolutionKind = "help"
+)
+
+// Resolution is the result of resolving argv.
+type Resolution struct {
+	Kind ResolutionKind
+
+	// Request is set for command resolutions.
+	Request *Request
+	Handler Handler
+
+	// HelpScope and HelpAll are set for help resolutions.
+	HelpScope []string
+	HelpAll   bool
+
+	route *route
+}
+
+// ResolveOption configures one Resolve call.
+type ResolveOption func(*resolveOptions)
+
+type resolveOptions struct {
+	help              bool
+	preserveHelpRoute bool
+}
+
+// ResolveHelp allows argv ending in "help" or "help all" to resolve as help.
+func ResolveHelp() ResolveOption {
+	return func(opts *resolveOptions) {
+		opts.help = true
+	}
+}
+
+// PreserveHelpCommand keeps an exact executable route ending in literal "help"
+// as a command, even when ResolveHelp is enabled.
+func PreserveHelpCommand() ResolveOption {
+	return func(opts *resolveOptions) {
+		opts.preserveHelpRoute = true
+	}
+}
+
 type segment struct {
 	lit   string // non-empty for static segment: "comp", "image", "build"
 	param string // non-empty for param segment: e.g. "component" for "<component>"
@@ -292,6 +341,93 @@ func (r *Router) bestMatch(ctx context.Context, argv []string) (*route, *Request
 	return &r.routes[bestIdx], req, true
 }
 
+func makeResolveOptions(opts ...ResolveOption) resolveOptions {
+	var out resolveOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
+	}
+	return out
+}
+
+// Resolve resolves argv to either an executable command or contextual help.
+func (r *Router) Resolve(ctx context.Context, argv []string, opts ...ResolveOption) (Resolution, error) {
+	options := makeResolveOptions(opts...)
+
+	if options.help {
+		scope, all, ok := parseHelpRequest(argv)
+		if ok {
+			if options.preserveHelpRoute && !all {
+				if rt, req, ok := r.bestExactHelpMatch(ctx, argv); ok {
+					return Resolution{
+						Kind:    ResolutionCommand,
+						Request: req,
+						Handler: rt.handler,
+						route:   rt,
+					}, nil
+				}
+			}
+
+			return Resolution{
+				Kind:      ResolutionHelp,
+				HelpScope: append([]string{}, scope...),
+				HelpAll:   all,
+			}, nil
+		}
+	}
+
+	rt, req, ok := r.bestMatch(ctx, argv)
+	if !ok {
+		return Resolution{}, fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
+	}
+
+	return Resolution{
+		Kind:    ResolutionCommand,
+		Request: req,
+		Handler: rt.handler,
+		route:   rt,
+	}, nil
+}
+
+func (r *Router) bestExactHelpMatch(ctx context.Context, argv []string) (*route, *Request, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var bestRoute *route
+	var bestRank uint64
+	var bestParams Params
+
+	for i := range r.routes {
+		rt := &r.routes[i]
+		if !isExplicitHelpRoute(rt) || len(rt.segments) != len(argv) {
+			continue
+		}
+
+		rank, params := rt.matchArgv(argv)
+		if rank == 0 {
+			continue
+		}
+
+		if bestRoute == nil || rank > bestRank {
+			bestRoute = rt
+			bestRank = rank
+			bestParams = params
+		}
+	}
+
+	if bestRoute == nil {
+		return nil, nil, false
+	}
+
+	return bestRoute, &Request{
+		ctx:    ctx,
+		Args:   argv,
+		Params: bestParams,
+	}, true
+}
+
 func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
 	if len(argv) == 0 {
 		return 1, Params{}
@@ -330,6 +466,8 @@ func (rt *route) matchPrefix(argv []string) (rank uint64, params Params) {
 
 func (r *Router) descendantRoutes(argv []string) []*route {
 	var out []*route
+	var bestRank uint64
+
 	for i := range r.routes {
 		rt := &r.routes[i]
 
@@ -342,7 +480,13 @@ func (r *Router) descendantRoutes(argv []string) []*route {
 			continue
 		}
 
-		out = append(out, rt)
+		if bestRank == 0 || rank > bestRank {
+			bestRank = rank
+			out = out[:0]
+		}
+		if rank == bestRank {
+			out = append(out, rt)
+		}
 	}
 
 	sortRoutesForHelp(out)
@@ -352,11 +496,14 @@ func (r *Router) descendantRoutes(argv []string) []*route {
 // Run attempts to match argv against registered routes and executes
 // the first matching handler. ctx becomes the root context for the Request.
 func (r *Router) Run(ctx context.Context, argv []string) error {
-	rt, req, ok := r.bestMatch(ctx, argv)
-	if !ok {
+	res, err := r.Resolve(ctx, argv)
+	if err != nil {
+		return err
+	}
+	if res.Kind != ResolutionCommand || res.Handler == nil {
 		return fmt.Errorf("no matching command for `%s`", strings.Join(argv, " "))
 	}
-	return rt.handler(req)
+	return res.Handler(res.Request)
 }
 
 // Routes is a convenience entry-point to build routes with a Builder.
