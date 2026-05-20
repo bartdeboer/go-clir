@@ -207,7 +207,7 @@ r.Routes(func(b *clir.Builder) {
     })
 })
 
-_ = r.FRunWithHelp(context.Background(), os.Stdout, []string{"help"})
+_ = r.FRunWithHelp(context.Background(), os.Stdout, []string{"help"}, clir.Depth(1))
 // Example CLI commands.
 //
 // Available commands:
@@ -220,3 +220,15 @@ _ = r.FRunWithHelp(context.Background(), os.Stdout, []string{"comp", "api", "hel
 If `comp <component> help` were registered with `Describe` instead of `Handle`,
 `FRunWithHelp` would treat `comp api help` as contextual help metadata rather
 than executing it as a command.
+
+By default contextual help prints all descendants under the scope. Use `Depth`
+or `LitDepth` to limit output relative to that scope:
+
+```go
+_ = r.FPrintHelp(context.Background(), os.Stdout, []string{"comp"}, clir.Depth(1))
+_ = r.FPrintHelp(context.Background(), os.Stdout, []string{"comp"}, clir.LitDepth(1))
+```
+
+`Depth` counts all route segments after the scope. `LitDepth` counts only
+literal segments, so parameter segments such as `<component>` do not consume
+depth.

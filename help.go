@@ -42,6 +42,8 @@ type HelpOption func(*helpOptions)
 type helpOptions struct {
 	includeHidden bool
 	filter        func(RouteInfo) bool
+	depth         *int
+	litDepth      *int
 }
 
 // IncludeHidden includes routes marked Hidden in help output.
@@ -56,6 +58,21 @@ func IncludeHidden() HelpOption {
 func FilterHelp(fn func(RouteInfo) bool) HelpOption {
 	return func(opts *helpOptions) {
 		opts.filter = fn
+	}
+}
+
+// Depth limits contextual help to n route segments below the help scope.
+func Depth(n int) HelpOption {
+	return func(opts *helpOptions) {
+		opts.depth = &n
+	}
+}
+
+// LitDepth limits contextual help to n literal route segments below the help
+// scope. Parameter segments do not count toward the limit.
+func LitDepth(n int) HelpOption {
+	return func(opts *helpOptions) {
+		opts.litDepth = &n
 	}
 }
 
@@ -223,10 +240,10 @@ func (r *Router) bestScopeRoute(scope []string) (*route, bool) {
 
 func (r *Router) helpEntries(scope []string, all bool, opts helpOptions) []RouteInfo {
 	descendants := r.descendantRoutes(scope)
-	if all {
+	if all || !opts.hasDepthLimit() {
 		return sortedRouteInfos(filterOutHelpRoutes(descendants), opts)
 	}
-	return consolidateHelpRoutes(scope, descendants, 1, opts)
+	return consolidateHelpRoutes(scope, descendants, opts)
 }
 
 // PrintHelp prints all registered patterns and their descriptions.
@@ -255,12 +272,7 @@ func filterOutHelpRoutes(routes []*route) []*route {
 	return out
 }
 
-func consolidateHelpRoutes(scope []string, routes []*route, level int, opts helpOptions) []RouteInfo {
-	if level <= 0 {
-		return nil
-	}
-
-	entryDepth := len(scope) + level
+func consolidateHelpRoutes(scope []string, routes []*route, opts helpOptions) []RouteInfo {
 	entries := map[string]*route{}
 
 	for _, rt := range routes {
@@ -273,29 +285,9 @@ func consolidateHelpRoutes(scope []string, routes []*route, level int, opts help
 			continue
 		}
 
-		if isExplicitHelpRoute(rt) {
-			if len(rt.segments) == entryDepth+1 {
-				entry := routePrefix(rt, entryDepth)
-				entry.desc = rt.desc
-				key := entry.String()
-				existing, ok := entries[key]
-				if !ok {
-					entries[key] = entry
-				} else if existing.desc == "" {
-					existing.desc = entry.desc
-				}
-			}
+		entry := helpEntryRoute(scope, rt, opts)
+		if entry == nil {
 			continue
-		}
-
-		depth := len(rt.segments)
-		if relDepth > level {
-			depth = entryDepth
-		}
-
-		entry := routePrefix(rt, depth)
-		if relDepth > level {
-			entry.desc = ""
 		}
 
 		key := entry.String()
@@ -316,13 +308,73 @@ func consolidateHelpRoutes(scope []string, routes []*route, level int, opts help
 	return sortedRouteInfos(out, opts)
 }
 
-func routePrefix(rt *route, n int) *route {
-	return &route{
-		segments: append([]segment{}, rt.segments[:n]...),
-		desc:     rt.desc,
+func helpEntryRoute(scope []string, rt *route, opts helpOptions) *route {
+	segs := rt.segments
+	desc := rt.desc
+	if isExplicitHelpRoute(rt) {
+		segs = rt.segments[:len(rt.segments)-1]
+	}
+
+	if len(segs) <= len(scope) {
+		return nil
+	}
+
+	depth := len(segs)
+	truncated := false
+
+	if opts.depth != nil {
+		if *opts.depth <= 0 {
+			return nil
+		}
+		maxDepth := len(scope) + *opts.depth
+		if depth > maxDepth {
+			depth = maxDepth
+			truncated = true
+		}
+	}
+
+	if opts.litDepth != nil {
+		if *opts.litDepth <= 0 {
+			return nil
+		}
+		litDepth, ok := prefixDepthForLiteralLimit(scope, segs, *opts.litDepth)
+		if !ok {
+			return nil
+		}
+		if litDepth < depth {
+			depth = litDepth
+			truncated = true
+		}
+	}
+
+	entry := &route{
+		segments: append([]segment{}, segs[:depth]...),
+		desc:     desc,
 		hidden:   rt.hidden,
 		tags:     append([]string{}, rt.tags...),
 	}
+	if truncated {
+		entry.desc = ""
+	}
+	return entry
+}
+
+func prefixDepthForLiteralLimit(scope []string, segs []segment, limit int) (int, bool) {
+	literals := 0
+	for i := len(scope); i < len(segs); i++ {
+		if segs[i].lit == "" {
+			continue
+		}
+		literals++
+		if literals == limit {
+			depth := i + 1
+			for depth < len(segs) && segs[depth].param != "" {
+				depth++
+			}
+			return depth, true
+		}
+	}
+	return len(segs), true
 }
 
 func (r *Router) writeHelpEntries(w io.Writer, entries []RouteInfo) {
@@ -395,6 +447,10 @@ func (opts helpOptions) include(info RouteInfo) bool {
 		return false
 	}
 	return true
+}
+
+func (opts helpOptions) hasDepthLimit() bool {
+	return opts.depth != nil || opts.litDepth != nil
 }
 
 // WriteHelpColumns writes command entries as the default aligned two-column list.

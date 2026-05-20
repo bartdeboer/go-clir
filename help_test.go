@@ -125,11 +125,13 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 	tests := []struct {
 		name string
 		argv []string
+		opts []HelpOption
 		want string
 	}{
 		{
 			name: "root",
 			argv: []string{"help"},
+			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Root command help.\n" +
 				"\n" +
@@ -141,6 +143,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		{
 			name: "literal prefix",
 			argv: []string{"comp", "help"},
+			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Manage components in the current deployment.\n" +
 				"\n" +
@@ -151,6 +154,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		{
 			name: "parameter prefix",
 			argv: []string{"comp", "api", "help"},
+			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Manage one component.\n" +
 				"\n" +
@@ -162,6 +166,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		{
 			name: "nested parameter prefix",
 			argv: []string{"comp", "api", "image", "help"},
+			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Build and publish component images.\n" +
 				"\n" +
@@ -187,6 +192,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		{
 			name: "nested prefix",
 			argv: []string{"comp", "api", "task", "help"},
+			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Run operational tasks.\n" +
 				"\n" +
@@ -231,7 +237,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := r.FRunWithHelp(context.Background(), &buf, tt.argv); err != nil {
+			if err := r.FRunWithHelp(context.Background(), &buf, tt.argv, tt.opts...); err != nil {
 				t.Fatalf("FRunWithHelp returned error: %v", err)
 			}
 
@@ -255,7 +261,7 @@ func TestRouter_FRunWithHelp_ConsolidatesImplicitChildPrefixes(t *testing.T) {
 	r.Handle("gcloud dns list", "List DNS auth records", noop)
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"gcloud", "help"}); err != nil {
+	if err := r.FRunWithHelp(context.Background(), &buf, []string{"gcloud", "help"}, Depth(1)); err != nil {
 		t.Fatalf("FRunWithHelp returned error: %v", err)
 	}
 
@@ -287,11 +293,13 @@ func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 	tests := []struct {
 		name string
 		argv []string
+		opts []HelpOption
 		want string
 	}{
 		{
 			name: "consolidated help",
 			argv: []string{"tool", "help"},
+			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Tool commands.\n" +
 				"\n" +
@@ -316,7 +324,7 @@ func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := r.FRunWithHelp(context.Background(), &buf, tt.argv); err != nil {
+			if err := r.FRunWithHelp(context.Background(), &buf, tt.argv, tt.opts...); err != nil {
 				t.Fatalf("FRunWithHelp returned error: %v", err)
 			}
 
@@ -325,6 +333,64 @@ func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRouter_FPrintHelp_DepthOptionsAreRelativeToScope(t *testing.T) {
+	r := New()
+	noop := func(req *Request) error { return nil }
+
+	r.Describe("codex model", "Model commands")
+	r.Handle("codex model list", "List models", noop)
+	r.Handle("codex model effort list", "List effort values", noop)
+	r.Handle("codex model effort set <effort>", "Set effort", noop)
+
+	t.Run("default prints all descendants under scope", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model"}); err != nil {
+			t.Fatalf("FPrintHelp returned error: %v", err)
+		}
+
+		out := buf.String()
+		for _, want := range []string{
+			"codex model list",
+			"codex model effort list",
+			"codex model effort set <effort>",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("missing %q from help: %q", want, out)
+			}
+		}
+	})
+
+	t.Run("Depth limits relative segment depth", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model"}, Depth(1)); err != nil {
+			t.Fatalf("FPrintHelp returned error: %v", err)
+		}
+
+		want := "" +
+			"Model commands\n" +
+			"\n" +
+			"Available commands:\n" +
+			"  codex model effort\n" +
+			"  codex model list    List models\n"
+
+		if got := buf.String(); got != want {
+			t.Fatalf("unexpected help output\ngot:\n%q\nwant:\n%q", got, want)
+		}
+	})
+
+	t.Run("LitDepth ignores params and includes trailing params for selected literal", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model"}, LitDepth(2)); err != nil {
+			t.Fatalf("FPrintHelp returned error: %v", err)
+		}
+
+		out := buf.String()
+		if !strings.Contains(out, "codex model effort set <effort>") {
+			t.Fatalf("missing set command with trailing param: %q", out)
+		}
+	})
 }
 
 func TestRouter_FRunWithHelp_NoHelpAvailable(t *testing.T) {
