@@ -27,12 +27,15 @@ func (r RouteInfo) HasTag(tag string) bool {
 	return false
 }
 
-// HelpOption configures one help rendering call.
-type HelpOption func(*helpOptions)
+// FilterOption configures route selection for help/discovery APIs.
+type FilterOption func(*filterOptions)
 
-type helpOptions struct {
+// HelpOption is kept as an alias for older callers. Prefer FilterOption.
+type HelpOption = FilterOption
+
+type filterOptions struct {
 	includeHidden bool
-	filter        func(RouteInfo) bool
+	filters       []func(RouteInfo) bool
 	depth         *int
 	litDepth      *int
 }
@@ -66,32 +69,81 @@ func isHelpToken(arg string) bool {
 	}
 }
 
-// IncludeHidden includes routes marked Hidden in help output.
-func IncludeHidden() HelpOption {
-	return func(opts *helpOptions) {
+// IncludeHidden includes routes marked Hidden in route selection.
+func IncludeHidden() FilterOption {
+	return func(opts *filterOptions) {
 		opts.includeHidden = true
 	}
 }
 
-// FilterHelp applies arbitrary consumer-owned filtering to help output.
+// Where applies arbitrary consumer-owned filtering to route selection.
 // It runs after the default hidden-route filter.
-func FilterHelp(fn func(RouteInfo) bool) HelpOption {
-	return func(opts *helpOptions) {
-		opts.filter = fn
+func Where(fn func(RouteInfo) bool) FilterOption {
+	return func(opts *filterOptions) {
+		if fn != nil {
+			opts.filters = append(opts.filters, fn)
+		}
 	}
 }
 
+// FilterHelp is kept for older callers. Prefer Where.
+func FilterHelp(fn func(RouteInfo) bool) FilterOption {
+	return Where(fn)
+}
+
+// IncludeTags includes routes that have at least one of tags. Passing no tags
+// applies no constraint. Multiple IncludeTags calls compose with AND: each call
+// must match at least one of its tags.
+func IncludeTags(tags ...string) FilterOption {
+	if len(tags) == 0 {
+		return Where(nil)
+	}
+	wanted := tagSet(tags)
+	return Where(func(info RouteInfo) bool {
+		for _, tag := range info.Tags {
+			if wanted[tag] {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// ExcludeTags excludes routes that have any of tags.
+func ExcludeTags(tags ...string) FilterOption {
+	if len(tags) == 0 {
+		return Where(nil)
+	}
+	blocked := tagSet(tags)
+	return Where(func(info RouteInfo) bool {
+		for _, tag := range info.Tags {
+			if blocked[tag] {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+func tagSet(tags []string) map[string]bool {
+	out := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		out[tag] = true
+	}
+	return out
+}
+
 // Depth limits contextual help to n route segments below the help scope.
-func Depth(n int) HelpOption {
-	return func(opts *helpOptions) {
+func Depth(n int) FilterOption {
+	return func(opts *filterOptions) {
 		opts.depth = &n
 	}
 }
 
 // LitDepth limits contextual help to n literal route segments below the help
 // scope. Parameter segments do not count toward the limit.
-func LitDepth(n int) HelpOption {
-	return func(opts *helpOptions) {
+func LitDepth(n int) FilterOption {
+	return func(opts *filterOptions) {
 		opts.litDepth = &n
 	}
 }
@@ -124,15 +176,21 @@ func routeInfo(rt *route) RouteInfo {
 // FPrintHelp renders contextual help for argv.
 // argv is treated exactly as the command scope; it is not parsed for trailing
 // help tokens.
-func (r *Router) FPrintHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
+func (r *Router) FPrintHelp(ctx context.Context, w io.Writer, argv []string, opts ...FilterOption) error {
 	_ = ctx
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, append([]string{}, argv...), makeHelpOptions(opts...))
+	return r.printCommandHelp(w, append([]string{}, argv...), makeFilterOptions(opts...))
 }
 
-func (r *Router) printCommandHelp(w io.Writer, scope []string, opts helpOptions) error {
+// HelpRoutes returns the help/discovery routes below scope after applying opts.
+// It uses the same route-selection semantics as FPrintHelp without rendering.
+func (r *Router) HelpRoutes(scope []string, opts ...FilterOption) []RouteInfo {
+	return r.helpEntries(append([]string{}, scope...), makeFilterOptions(opts...))
+}
+
+func (r *Router) printCommandHelp(w io.Writer, scope []string, opts filterOptions) error {
 	helpRoute, hasHelpRoute := r.bestScopeRoute(scope)
 	entries := r.helpEntries(scope, opts)
 
@@ -187,7 +245,7 @@ func (r *Router) bestScopeRoute(scope []string) (*route, bool) {
 	return &r.routes[bestIdx], true
 }
 
-func (r *Router) helpEntries(scope []string, opts helpOptions) []RouteInfo {
+func (r *Router) helpEntries(scope []string, opts filterOptions) []RouteInfo {
 	descendants := r.descendantRoutes(scope)
 	if !opts.hasDepthLimit() {
 		return sortedRouteInfos(uniqueHelpRoutes(descendants), opts)
@@ -224,7 +282,7 @@ func uniqueHelpRoutes(routes []*route) []*route {
 }
 
 // PrintHelp prints all registered patterns and their descriptions.
-func (r *Router) PrintHelp(w io.Writer, opts ...HelpOption) {
+func (r *Router) PrintHelp(w io.Writer, opts ...FilterOption) {
 	if len(r.routes) == 0 {
 		fmt.Fprintln(w, "No commands registered.")
 		return
@@ -236,10 +294,10 @@ func (r *Router) PrintHelp(w io.Writer, opts ...HelpOption) {
 	}
 	sortRoutesForHelp(all)
 
-	r.writeHelpEntries(w, sortedRouteInfos(all, makeHelpOptions(opts...)))
+	r.writeHelpEntries(w, sortedRouteInfos(all, makeFilterOptions(opts...)))
 }
 
-func consolidateHelpRoutes(scope []string, routes []*route, opts helpOptions) []RouteInfo {
+func consolidateHelpRoutes(scope []string, routes []*route, opts filterOptions) []RouteInfo {
 	entries := map[string]*route{}
 
 	for _, rt := range routes {
@@ -275,7 +333,7 @@ func consolidateHelpRoutes(scope []string, routes []*route, opts helpOptions) []
 	return sortedRouteInfos(out, opts)
 }
 
-func helpEntryRoute(scope []string, rt *route, opts helpOptions) *route {
+func helpEntryRoute(scope []string, rt *route, opts filterOptions) *route {
 	segs := rt.segments
 	desc := rt.desc
 
@@ -342,7 +400,7 @@ func (r *Router) writeHelpEntries(w io.Writer, entries []RouteInfo) {
 	r.helpEntryWriter()(w, entries)
 }
 
-func sortedRouteInfos(routes []*route, opts helpOptions) []RouteInfo {
+func sortedRouteInfos(routes []*route, opts filterOptions) []RouteInfo {
 	entries := make([]struct {
 		pat     string
 		sortPat string
@@ -390,8 +448,8 @@ func sortedRouteInfos(routes []*route, opts helpOptions) []RouteInfo {
 	return out
 }
 
-func makeHelpOptions(opts ...HelpOption) helpOptions {
-	var out helpOptions
+func makeFilterOptions(opts ...FilterOption) filterOptions {
+	var out filterOptions
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&out)
@@ -400,17 +458,19 @@ func makeHelpOptions(opts ...HelpOption) helpOptions {
 	return out
 }
 
-func (opts helpOptions) include(info RouteInfo) bool {
+func (opts filterOptions) include(info RouteInfo) bool {
 	if info.Hidden && !opts.includeHidden {
 		return false
 	}
-	if opts.filter != nil && !opts.filter(info) {
-		return false
+	for _, filter := range opts.filters {
+		if !filter(info) {
+			return false
+		}
 	}
 	return true
 }
 
-func (opts helpOptions) hasDepthLimit() bool {
+func (opts filterOptions) hasDepthLimit() bool {
 	return opts.depth != nil || opts.litDepth != nil
 }
 

@@ -15,6 +15,14 @@ func routePatterns(routes []*route) []string {
 	return out
 }
 
+func routeInfoPatterns(routes []RouteInfo) []string {
+	out := make([]string, len(routes))
+	for i, rt := range routes {
+		out[i] = rt.Pattern
+	}
+	return out
+}
+
 func TestRouter_descendantRoutes(t *testing.T) {
 	r := New()
 
@@ -164,13 +172,13 @@ func TestRouter_FPrintHelp_PrintsExactContextualHelpForCommandTree(t *testing.T)
 	tests := []struct {
 		name string
 		argv []string
-		opts []HelpOption
+		opts []FilterOption
 		want string
 	}{
 		{
 			name: "root",
 			argv: nil,
-			opts: []HelpOption{Depth(1)},
+			opts: []FilterOption{Depth(1)},
 			want: "" +
 				"Root command help.\n" +
 				"\n" +
@@ -182,7 +190,7 @@ func TestRouter_FPrintHelp_PrintsExactContextualHelpForCommandTree(t *testing.T)
 		{
 			name: "literal prefix",
 			argv: []string{"comp"},
-			opts: []HelpOption{Depth(1)},
+			opts: []FilterOption{Depth(1)},
 			want: "" +
 				"Manage components in the current deployment.\n" +
 				"\n" +
@@ -193,7 +201,7 @@ func TestRouter_FPrintHelp_PrintsExactContextualHelpForCommandTree(t *testing.T)
 		{
 			name: "parameter prefix",
 			argv: []string{"comp", "api"},
-			opts: []HelpOption{Depth(1)},
+			opts: []FilterOption{Depth(1)},
 			want: "" +
 				"Manage one component.\n" +
 				"\n" +
@@ -205,7 +213,7 @@ func TestRouter_FPrintHelp_PrintsExactContextualHelpForCommandTree(t *testing.T)
 		{
 			name: "nested parameter prefix",
 			argv: []string{"comp", "api", "image"},
-			opts: []HelpOption{Depth(1)},
+			opts: []FilterOption{Depth(1)},
 			want: "" +
 				"Build and publish component images.\n" +
 				"\n" +
@@ -231,7 +239,7 @@ func TestRouter_FPrintHelp_PrintsExactContextualHelpForCommandTree(t *testing.T)
 		{
 			name: "nested prefix",
 			argv: []string{"comp", "api", "task"},
-			opts: []HelpOption{Depth(1)},
+			opts: []FilterOption{Depth(1)},
 			want: "" +
 				"Run operational tasks.\n" +
 				"\n" +
@@ -332,13 +340,13 @@ func TestRouter_FPrintHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 	tests := []struct {
 		name string
 		argv []string
-		opts []HelpOption
+		opts []FilterOption
 		want string
 	}{
 		{
 			name: "consolidated help",
 			argv: []string{"tool"},
-			opts: []HelpOption{Depth(1)},
+			opts: []FilterOption{Depth(1)},
 			want: "" +
 				"Tool commands.\n" +
 				"\n" +
@@ -558,7 +566,7 @@ func TestRouter_FPrintHelp_FiltersContextualHelpByTag(t *testing.T) {
 	r.Handle("model set <model>", "Set model", noop, Tag("advanced"))
 	r.Handle("refresh", "Legacy refresh alias", noop, Hidden(), Tag("common"))
 
-	commonOnly := FilterHelp(func(info RouteInfo) bool {
+	commonOnly := Where(func(info RouteInfo) bool {
 		return info.HasTag("common")
 	})
 
@@ -582,6 +590,55 @@ func TestRouter_FPrintHelp_FiltersContextualHelpByTag(t *testing.T) {
 	}
 }
 
+func TestRouter_HelpRoutes_ReturnsScopedRoutes(t *testing.T) {
+	r := New()
+	noop := func(req *Request) error { return nil }
+
+	r.Describe("codex", "Codex commands")
+	r.Handle("codex model list", "List models", noop)
+	r.Handle("codex model set <model>", "Set model", noop)
+	r.Handle("thread status", "Show thread status", noop)
+
+	routes := r.HelpRoutes([]string{"codex"}, LitDepth(1))
+	got := routeInfoPatterns(routes)
+	want := []string{"codex model"}
+
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("HelpRoutes returned %v, want %v", got, want)
+	}
+}
+
+func TestRouter_HelpRoutes_TagFilters(t *testing.T) {
+	r := New()
+	noop := func(req *Request) error { return nil }
+
+	r.Handle("status", "Show status", noop, Tag("common"))
+	r.Handle("model list", "List models", noop, Tag("common"))
+	r.Handle("model set <model>", "Set model", noop, Tag("advanced"))
+	r.Handle("debug", "Debug", noop, Tag("common", "debug"))
+	r.Handle("debug trace", "Trace debug", noop, Tag("common", "debug", "trace"))
+
+	t.Run("include and exclude tags", func(t *testing.T) {
+		routes := r.HelpRoutes(nil, IncludeTags("common"), ExcludeTags("debug"))
+		got := routeInfoPatterns(routes)
+		want := []string{"model list", "status"}
+
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("HelpRoutes returned %v, want %v", got, want)
+		}
+	})
+
+	t.Run("multiple include tags compose with and", func(t *testing.T) {
+		routes := r.HelpRoutes(nil, IncludeTags("common"), IncludeTags("debug"))
+		got := routeInfoPatterns(routes)
+		want := []string{"debug", "debug trace"}
+
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("HelpRoutes returned %v, want %v", got, want)
+		}
+	})
+}
+
 func TestBuilder_Handle_AcceptsRouteOptions(t *testing.T) {
 	r := New()
 
@@ -593,7 +650,7 @@ func TestBuilder_Handle_AcceptsRouteOptions(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	r.PrintHelp(&buf, FilterHelp(func(info RouteInfo) bool {
+	r.PrintHelp(&buf, Where(func(info RouteInfo) bool {
 		return info.HasTag("common")
 	}))
 

@@ -231,12 +231,28 @@ _ = r.FPrintHelp(context.Background(), os.Stdout, []string{"comp", "api"}, clir.
 //   comp <component> status  Show component status
 ```
 
+Use `HelpRoutes` when you want clir to select scoped help routes but your
+application wants to render or combine them itself:
+
+```go
+routes := r.HelpRoutes(nil,
+    clir.LitDepth(1),
+    clir.IncludeTags("common"),
+    clir.ExcludeTags("debug"),
+)
+clir.WriteHelpInline(os.Stdout, routes)
+```
+
 By default contextual help prints all descendants under the scope. Use `Depth`
-or `LitDepth` to limit output relative to that scope:
+or `LitDepth` to limit output relative to that scope. Use `Where` for custom
+route filtering:
 
 ```go
 _ = r.FPrintHelp(context.Background(), os.Stdout, []string{"comp"}, clir.Depth(1))
 _ = r.FPrintHelp(context.Background(), os.Stdout, []string{"comp"}, clir.LitDepth(1))
+_ = r.FPrintHelp(context.Background(), os.Stdout, nil, clir.Where(func(route clir.RouteInfo) bool {
+    return route.HasTag("common")
+}))
 ```
 
 `Depth` counts all route segments after the scope. `LitDepth` counts only
