@@ -240,7 +240,12 @@ func (r *Router) bestScopeRoute(scope []string) (*route, bool) {
 
 func (r *Router) helpEntries(scope []string, all bool, opts helpOptions) []RouteInfo {
 	descendants := r.descendantRoutes(scope)
-	if all || !opts.hasDepthLimit() {
+	if all {
+		// `help all` is an explicit request for the full subtree and therefore
+		// overrides Depth/LitDepth limits supplied by the caller.
+		return sortedRouteInfos(filterOutHelpRoutes(descendants), opts)
+	}
+	if !opts.hasDepthLimit() {
 		return sortedRouteInfos(filterOutHelpRoutes(descendants), opts)
 	}
 	return consolidateHelpRoutes(scope, descendants, opts)
@@ -337,10 +342,7 @@ func helpEntryRoute(scope []string, rt *route, opts helpOptions) *route {
 		if *opts.litDepth <= 0 {
 			return nil
 		}
-		litDepth, ok := prefixDepthForLiteralLimit(scope, segs, *opts.litDepth)
-		if !ok {
-			return nil
-		}
+		litDepth := prefixDepthForLiteralLimit(scope, segs, *opts.litDepth)
 		if litDepth < depth {
 			depth = litDepth
 			truncated = true
@@ -359,7 +361,7 @@ func helpEntryRoute(scope []string, rt *route, opts helpOptions) *route {
 	return entry
 }
 
-func prefixDepthForLiteralLimit(scope []string, segs []segment, limit int) (int, bool) {
+func prefixDepthForLiteralLimit(scope []string, segs []segment, limit int) int {
 	literals := 0
 	for i := len(scope); i < len(segs); i++ {
 		if segs[i].lit == "" {
@@ -371,10 +373,10 @@ func prefixDepthForLiteralLimit(scope []string, segs []segment, limit int) (int,
 			for depth < len(segs) && segs[depth].param != "" {
 				depth++
 			}
-			return depth, true
+			return depth
 		}
 	}
-	return len(segs), true
+	return len(segs)
 }
 
 func (r *Router) writeHelpEntries(w io.Writer, entries []RouteInfo) {

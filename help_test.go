@@ -391,6 +391,48 @@ func TestRouter_FPrintHelp_DepthOptionsAreRelativeToScope(t *testing.T) {
 			t.Fatalf("missing set command with trailing param: %q", out)
 		}
 	})
+
+	t.Run("Depth and LitDepth together use the stricter limit", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model"}, Depth(3), LitDepth(1)); err != nil {
+			t.Fatalf("FPrintHelp returned error: %v", err)
+		}
+
+		want := "" +
+			"Model commands\n" +
+			"\n" +
+			"Available commands:\n" +
+			"  codex model effort\n" +
+			"  codex model list    List models\n"
+
+		if got := buf.String(); got != want {
+			t.Fatalf("unexpected help output\ngot:\n%q\nwant:\n%q", got, want)
+		}
+	})
+
+	t.Run("help all overrides explicit depth limit", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model", "help", "all"}, Depth(1)); err != nil {
+			t.Fatalf("FPrintHelp returned error: %v", err)
+		}
+
+		out := buf.String()
+		if !strings.Contains(out, "codex model effort set <effort>") {
+			t.Fatalf("help all should include full descendants despite Depth(1): %q", out)
+		}
+	})
+
+	t.Run("LitDepth greater than available literals shows full route", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model"}, LitDepth(5)); err != nil {
+			t.Fatalf("FPrintHelp returned error: %v", err)
+		}
+
+		out := buf.String()
+		if !strings.Contains(out, "codex model effort set <effort>") {
+			t.Fatalf("LitDepth beyond available literals should include full route: %q", out)
+		}
+	})
 }
 
 func TestRouter_FRunWithHelp_NoHelpAvailable(t *testing.T) {

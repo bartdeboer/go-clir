@@ -232,3 +232,7 @@ _ = r.FPrintHelp(context.Background(), os.Stdout, []string{"comp"}, clir.LitDept
 `Depth` counts all route segments after the scope. `LitDepth` counts only
 literal segments, so parameter segments such as `<component>` do not consume
 depth.
+
+Callers that relied on the previous one-level contextual help default should
+pass `Depth(1)` explicitly. A user request ending in `help all` is treated as
+an explicit request for the full subtree and overrides `Depth` / `LitDepth`.
