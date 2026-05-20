@@ -183,12 +183,29 @@ r.PrintHelp(os.Stdout)
 Use `Handle` for executable commands. Use `Describe` for non-executable route
 metadata that should appear in contextual help.
 
+`FPrintHelp` is explicit: it prints help for the `argv` scope you pass. It does
+not parse or strip trailing `help` tokens. If your CLI accepts `help`, `--help`,
+or another convention, parse that in your application and pass the intended
+scope to `FPrintHelp`.
+
+```go
+if clir.IsHelpRequest(argv) {
+    return r.FPrintHelp(ctx, w, clir.StripHelpToken(argv))
+}
+return r.Run(ctx, argv)
+```
+
+If your application has executable routes whose final segment is `help`, check
+for those routes before applying this convention. For example,
+`Handle("comp <component> help", ...)` is a real command; the generic snippet
+above would instead treat `comp api help` as a contextual help request.
+
 ```go
 r := clir.New()
 
 r.Routes(func(b *clir.Builder) {
     // Root help metadata. This route is not executable.
-    b.Describe("help", "Example CLI commands.")
+    b.Describe("", "Example CLI commands.")
 
     // Describe routes contribute descriptions to help, but do not run.
     b.Describe("comp", "Component commands.")
@@ -199,27 +216,20 @@ r.Routes(func(b *clir.Builder) {
         fmt.Println("status:", req.Params["component"])
         return nil
     })
-
-    // Exact executable routes ending in "help" are still commands.
-    b.Handle("comp <component> help", "Render dynamic component help", func(req *clir.Request) error {
-        fmt.Println("dynamic help for:", req.Params["component"])
-        return nil
-    })
 })
 
-_ = r.FRunWithHelp(context.Background(), os.Stdout, []string{"help"}, clir.Depth(1))
+_ = r.FPrintHelp(context.Background(), os.Stdout, nil, clir.Depth(1))
 // Example CLI commands.
 //
 // Available commands:
 //   comp  Component commands.
 
-_ = r.FRunWithHelp(context.Background(), os.Stdout, []string{"comp", "api", "help"})
-// dynamic help for: api
+_ = r.FPrintHelp(context.Background(), os.Stdout, []string{"comp", "api"}, clir.Depth(1))
+// Manage one component.
+//
+// Available commands:
+//   comp <component> status  Show component status
 ```
-
-If `comp <component> help` were registered with `Describe` instead of `Handle`,
-`FRunWithHelp` would treat `comp api help` as contextual help metadata rather
-than executing it as a command.
 
 By default contextual help prints all descendants under the scope. Use `Depth`
 or `LitDepth` to limit output relative to that scope:
@@ -234,5 +244,4 @@ literal segments, so parameter segments such as `<component>` do not consume
 depth.
 
 Callers that relied on the previous one-level contextual help default should
-pass `Depth(1)` explicitly. A user request ending in `help all` is treated as
-an explicit request for the full subtree and overrides `Depth` / `LitDepth`.
+pass `Depth(1)` explicitly.

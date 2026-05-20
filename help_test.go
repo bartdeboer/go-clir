@@ -47,34 +47,73 @@ func TestRouter_descendantRoutes(t *testing.T) {
 	})
 }
 
-func TestRouter_RunWithHelp_RunsCommandWhenNotHelp(t *testing.T) {
-	r := New()
-
-	var called bool
-	r.Handle("status", "Show status", func(req *Request) error {
-		called = true
-		return nil
-	})
-
-	if err := r.RunWithHelp(context.Background(), []string{"status"}); err != nil {
-		t.Fatalf("RunWithHelp returned error: %v", err)
+func TestHelpRequestHelpers(t *testing.T) {
+	tests := []struct {
+		name      string
+		argv      []string
+		wantHelp  bool
+		wantScope []string
+	}{
+		{
+			name:      "nil argv",
+			argv:      nil,
+			wantHelp:  false,
+			wantScope: nil,
+		},
+		{
+			name:      "plain help",
+			argv:      []string{"help"},
+			wantHelp:  true,
+			wantScope: nil,
+		},
+		{
+			name:      "scoped help",
+			argv:      []string{"comp", "api", "help"},
+			wantHelp:  true,
+			wantScope: []string{"comp", "api"},
+		},
+		{
+			name:      "flag help",
+			argv:      []string{"comp", "--help"},
+			wantHelp:  true,
+			wantScope: []string{"comp"},
+		},
+		{
+			name:      "em dash help",
+			argv:      []string{"comp", "—help"},
+			wantHelp:  true,
+			wantScope: []string{"comp"},
+		},
+		{
+			name:      "not help",
+			argv:      []string{"comp", "api"},
+			wantHelp:  false,
+			wantScope: []string{"comp", "api"},
+		},
 	}
 
-	if !called {
-		t.Fatal("expected command handler to be called")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsHelpRequest(tt.argv); got != tt.wantHelp {
+				t.Fatalf("IsHelpRequest(%v) = %v, want %v", tt.argv, got, tt.wantHelp)
+			}
+			if got := StripHelpToken(tt.argv); strings.Join(got, " ") != strings.Join(tt.wantScope, " ") {
+				t.Fatalf("StripHelpToken(%v) = %v, want %v", tt.argv, got, tt.wantScope)
+			}
+		})
 	}
 }
 
-func TestRouter_FRunWithHelp_PrintsContextualHelp(t *testing.T) {
+func TestRouter_FPrintHelp_PrintsContextualHelp(t *testing.T) {
 	r := New()
 
-	r.Describe("comp <component> help", "Manage component commands.")
+	r.Describe("comp <component>", "Manage component commands.")
 	r.Handle("comp <component> image", "Image commands", func(req *Request) error { return nil })
 	r.Handle("comp <component> logs", "View logs", func(req *Request) error { return nil })
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"comp", "api", "help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, []string{"comp", "api"}); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 
 	out := buf.String()
@@ -91,31 +130,31 @@ func TestRouter_FRunWithHelp_PrintsContextualHelp(t *testing.T) {
 		t.Fatalf("missing logs command: %q", out)
 	}
 	if strings.Contains(out, "comp <component> help") {
-		t.Fatalf("help route should not be listed as a child command: %q", out)
+		t.Fatalf("scope route should not be listed as a child command: %q", out)
 	}
 }
 
-func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.T) {
+func TestRouter_FPrintHelp_PrintsExactContextualHelpForCommandTree(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
-	r.Describe("help", "Root command help.")
+	r.Describe("", "Root command help.")
 	r.Handle("comp", "Manage components", noop)
-	r.Describe("comp help", "Manage components in the current deployment.")
+	r.Describe("comp", "Manage components in the current deployment.")
 	r.Handle("comp list", "List components", noop)
 	r.Handle("comp <component>", "Operate on one component", noop)
-	r.Describe("comp <component> help", "Manage one component.")
+	r.Describe("comp <component>", "Manage one component.")
 	r.Handle("comp <component> image", "Image commands", noop)
-	r.Describe("comp <component> image help", "Build and publish component images.")
+	r.Describe("comp <component> image", "Build and publish component images.")
 	r.Handle("comp <component> image build", "Build image", noop)
 	r.Handle("comp <component> image push", "Push image", noop)
 	r.Handle("comp <component> logs", "Stream logs", noop)
 	r.Handle("comp <component> task", "Task commands", noop)
-	r.Describe("comp <component> task help", "Run operational tasks.")
+	r.Describe("comp <component> task", "Run operational tasks.")
 	r.Handle("comp <component> task list", "List tasks", noop)
 	r.Handle("comp <component> task run", "Run task", noop)
 	r.Handle("env", "Manage environments", noop)
-	r.Describe("env help", "Manage deployment environments.")
+	r.Describe("env", "Manage deployment environments.")
 	r.Handle("env list", "List environments", noop)
 	r.Handle("env <environment>", "Operate on one environment", noop)
 	r.Handle("env <environment> promote", "Promote environment", noop)
@@ -130,7 +169,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 	}{
 		{
 			name: "root",
-			argv: []string{"help"},
+			argv: nil,
 			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Root command help.\n" +
@@ -142,7 +181,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		},
 		{
 			name: "literal prefix",
-			argv: []string{"comp", "help"},
+			argv: []string{"comp"},
 			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Manage components in the current deployment.\n" +
@@ -153,7 +192,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		},
 		{
 			name: "parameter prefix",
-			argv: []string{"comp", "api", "help"},
+			argv: []string{"comp", "api"},
 			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Manage one component.\n" +
@@ -165,7 +204,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		},
 		{
 			name: "nested parameter prefix",
-			argv: []string{"comp", "api", "image", "help"},
+			argv: []string{"comp", "api", "image"},
 			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Build and publish component images.\n" +
@@ -176,7 +215,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		},
 		{
 			name: "parameter prefix all descendants",
-			argv: []string{"comp", "api", "help", "all"},
+			argv: []string{"comp", "api"},
 			want: "" +
 				"Manage one component.\n" +
 				"\n" +
@@ -191,7 +230,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		},
 		{
 			name: "nested prefix",
-			argv: []string{"comp", "api", "task", "help"},
+			argv: []string{"comp", "api", "task"},
 			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Run operational tasks.\n" +
@@ -201,8 +240,8 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 				"  comp <component> task run   Run task\n",
 		},
 		{
-			name: "prefix without explicit help route",
-			argv: []string{"env", "prod", "help"},
+			name: "prefix without explicit describe route",
+			argv: []string{"env", "prod"},
 			want: "" +
 				"Available commands:\n" +
 				"  env <environment> promote   Promote environment\n" +
@@ -210,7 +249,7 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 		},
 		{
 			name: "root all descendants",
-			argv: []string{"help", "all"},
+			argv: nil,
 			want: "" +
 				"Root command help.\n" +
 				"\n" +
@@ -237,8 +276,8 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := r.FRunWithHelp(context.Background(), &buf, tt.argv, tt.opts...); err != nil {
-				t.Fatalf("FRunWithHelp returned error: %v", err)
+			if err := r.FPrintHelp(context.Background(), &buf, tt.argv, tt.opts...); err != nil {
+				t.Fatalf("FPrintHelp returned error: %v", err)
 			}
 
 			if got := buf.String(); got != tt.want {
@@ -248,21 +287,21 @@ func TestRouter_FRunWithHelp_PrintsExactContextualHelpForCommandTree(t *testing.
 	}
 }
 
-func TestRouter_FRunWithHelp_ConsolidatesImplicitChildPrefixes(t *testing.T) {
+func TestRouter_FPrintHelp_ConsolidatesImplicitChildPrefixes(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
-	r.Describe("gcloud help", "Google Cloud commands.")
+	r.Describe("gcloud", "Google Cloud commands.")
 	r.Handle("gcloud login", "Authenticate with gcloud", noop)
-	r.Describe("gcloud cluster help", "Cluster commands.")
+	r.Describe("gcloud cluster", "Cluster commands.")
 	r.Handle("gcloud cluster configure", "Configure current cluster context", noop)
 	r.Handle("gcloud cluster create <name>", "Create cluster from configuration", noop)
 	r.Handle("gcloud image <name> upload", "Upload image to remote registry", noop)
 	r.Handle("gcloud dns list", "List DNS auth records", noop)
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"gcloud", "help"}, Depth(1)); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, []string{"gcloud"}, Depth(1)); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 
 	want := "" +
@@ -279,14 +318,14 @@ func TestRouter_FRunWithHelp_ConsolidatesImplicitChildPrefixes(t *testing.T) {
 	}
 }
 
-func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
+func TestRouter_FPrintHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
-	r.Describe("tool help", "Tool commands.")
+	r.Describe("tool", "Tool commands.")
 	r.Handle("tool direct", "Direct command", noop)
-	r.Describe("tool direct help", "Direct help text should not override the command.")
-	r.Describe("tool group help", "Group commands.")
+	r.Describe("tool direct", "Direct help text should not override the command.")
+	r.Describe("tool group", "Group commands.")
 	r.Handle("tool group run", "Run group task", noop)
 	r.Handle("tool empty run", "Run empty task", noop)
 
@@ -298,7 +337,7 @@ func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 	}{
 		{
 			name: "consolidated help",
-			argv: []string{"tool", "help"},
+			argv: []string{"tool"},
 			opts: []HelpOption{Depth(1)},
 			want: "" +
 				"Tool commands.\n" +
@@ -310,13 +349,14 @@ func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 		},
 		{
 			name: "all descendants",
-			argv: []string{"tool", "help", "all"},
+			argv: []string{"tool"},
 			want: "" +
 				"Tool commands.\n" +
 				"\n" +
 				"Available commands:\n" +
 				"  tool direct     Direct command\n" +
 				"  tool empty run  Run empty task\n" +
+				"  tool group      Group commands.\n" +
 				"  tool group run  Run group task\n",
 		},
 	}
@@ -324,8 +364,8 @@ func TestRouter_FRunWithHelp_ConsolidationDescriptionPolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := r.FRunWithHelp(context.Background(), &buf, tt.argv, tt.opts...); err != nil {
-				t.Fatalf("FRunWithHelp returned error: %v", err)
+			if err := r.FPrintHelp(context.Background(), &buf, tt.argv, tt.opts...); err != nil {
+				t.Fatalf("FPrintHelp returned error: %v", err)
 			}
 
 			if got := buf.String(); got != tt.want {
@@ -410,18 +450,6 @@ func TestRouter_FPrintHelp_DepthOptionsAreRelativeToScope(t *testing.T) {
 		}
 	})
 
-	t.Run("help all overrides explicit depth limit", func(t *testing.T) {
-		var buf bytes.Buffer
-		if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model", "help", "all"}, Depth(1)); err != nil {
-			t.Fatalf("FPrintHelp returned error: %v", err)
-		}
-
-		out := buf.String()
-		if !strings.Contains(out, "codex model effort set <effort>") {
-			t.Fatalf("help all should include full descendants despite Depth(1): %q", out)
-		}
-	})
-
 	t.Run("LitDepth greater than available literals shows full route", func(t *testing.T) {
 		var buf bytes.Buffer
 		if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model"}, LitDepth(5)); err != nil {
@@ -435,11 +463,11 @@ func TestRouter_FPrintHelp_DepthOptionsAreRelativeToScope(t *testing.T) {
 	})
 }
 
-func TestRouter_FRunWithHelp_NoHelpAvailable(t *testing.T) {
+func TestRouter_FPrintHelp_NoHelpAvailable(t *testing.T) {
 	r := New()
 
 	var buf bytes.Buffer
-	err := r.FRunWithHelp(context.Background(), &buf, []string{"comp", "api", "help"})
+	err := r.FPrintHelp(context.Background(), &buf, []string{"comp", "api"})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -448,17 +476,17 @@ func TestRouter_FRunWithHelp_NoHelpAvailable(t *testing.T) {
 	}
 }
 
-func TestRouter_FRunWithHelp_InlineFormatter(t *testing.T) {
+func TestRouter_FPrintHelp_InlineFormatter(t *testing.T) {
 	r := New()
 	r.SetHelpEntryFormatter(WriteHelpInline)
 
-	r.Describe("help", "Root help.")
+	r.Describe("", "Root help.")
 	r.Handle("alpha", "Alpha command", func(req *Request) error { return nil })
 	r.Handle("beta", "Beta command", func(req *Request) error { return nil })
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, nil); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 
 	want := "" +
@@ -524,7 +552,7 @@ func TestRouter_FPrintHelp_FiltersContextualHelpByTag(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
-	r.Describe("help", "Root help.")
+	r.Describe("", "Root help.")
 	r.Handle("status", "Show status", noop, Tag("common"))
 	r.Handle("model list", "List models", noop, Tag("common"))
 	r.Handle("model set <model>", "Set model", noop, Tag("advanced"))
@@ -535,7 +563,7 @@ func TestRouter_FPrintHelp_FiltersContextualHelpByTag(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	if err := r.FPrintHelp(context.Background(), &buf, []string{"help", "all"}, commonOnly); err != nil {
+	if err := r.FPrintHelp(context.Background(), &buf, nil, commonOnly); err != nil {
 		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 

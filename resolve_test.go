@@ -24,15 +24,15 @@ func TestRouter_Run_UsesResolve(t *testing.T) {
 	}
 }
 
-func TestRouter_FRunWithHelp_UsesResolve(t *testing.T) {
+func TestRouter_FPrintHelp_PrintsRootScope(t *testing.T) {
 	r := New()
 
-	r.Describe("help", "Root help.")
+	r.Describe("", "Root help.")
 	r.Handle("status", "Show status", func(req *Request) error { return nil })
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, nil); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 
 	out := buf.String()
@@ -70,65 +70,15 @@ func TestRouter_Resolve_CommandResult(t *testing.T) {
 	}
 }
 
-func TestParseHelpRequest(t *testing.T) {
-	req, ok := ParseHelpRequest([]string{"component", "api", "help", "all"})
-	if !ok {
-		t.Fatal("ok = false, want true")
-	}
-	if strings.Join(req.Scope, " ") != "component api" {
-		t.Fatalf("Scope = %v, want [component api]", req.Scope)
-	}
-	if !req.All {
-		t.Fatal("All = false, want true")
-	}
-}
-
-func TestRouter_FRunWithHelp_ExactExecutableHelpRouteWinsNaturally(t *testing.T) {
-	r := New()
-
-	r.Describe("component <component>", "Component root")
-
-	var called bool
-	r.Handle("component <component> help", "Dynamic component help", func(req *Request) error {
-		called = true
-		return nil
-	})
-
-	if err := r.FRunWithHelp(context.Background(), nil, []string{"component", "api", "help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
-	}
-	if !called {
-		t.Fatal("expected exact executable help route to run")
-	}
-}
-
-func TestRouter_FRunWithHelp_ExactExecutableRouteWinsWhenParamValueIsHelp(t *testing.T) {
-	r := New()
-
-	r.Describe("codex model", "Model commands")
-	var gotEffort string
-	r.Handle("codex model effort set <effort>", "Set effort", func(req *Request) error {
-		gotEffort = req.Params["effort"]
-		return nil
-	})
-
-	if err := r.FRunWithHelp(context.Background(), nil, []string{"codex", "model", "effort", "set", "help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
-	}
-	if gotEffort != "help" {
-		t.Fatalf("effort param = %q, want %q", gotEffort, "help")
-	}
-}
-
-func TestRouter_FRunWithHelp_PrefixMatchWithExtraHelpRendersContextualHelp(t *testing.T) {
+func TestRouter_FPrintHelp_PrintsProvidedScope(t *testing.T) {
 	r := New()
 
 	r.Describe("codex model", "Model commands")
 	r.Handle("codex model list", "List models", func(req *Request) error { return nil })
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"codex", "model", "help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, []string{"codex", "model"}); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "Model commands") {
@@ -173,15 +123,15 @@ func TestRouter_Run_DescribeRouteDoesNotExecute(t *testing.T) {
 	}
 }
 
-func TestRouter_FRunWithHelp_DescribeRouteAppearsInContextualHelp(t *testing.T) {
+func TestRouter_FPrintHelp_DescribeRouteAppearsInContextualHelp(t *testing.T) {
 	r := New()
 
-	r.Describe("help", "Root help.")
+	r.Describe("", "Root help.")
 	r.Describe("component", "Component commands")
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, nil); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 
 	out := buf.String()
@@ -193,15 +143,15 @@ func TestRouter_FRunWithHelp_DescribeRouteAppearsInContextualHelp(t *testing.T) 
 	}
 }
 
-func TestRouter_FRunWithHelp_DescribeRouteContributesIntro(t *testing.T) {
+func TestRouter_FPrintHelp_DescribeRouteContributesIntro(t *testing.T) {
 	r := New()
 
 	r.Describe("component <component>", "Manage one component.")
 	r.Handle("component <component> status", "Show status", func(req *Request) error { return nil })
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"component", "api", "help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, []string{"component", "api"}); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 
 	out := buf.String()
@@ -213,7 +163,7 @@ func TestRouter_FRunWithHelp_DescribeRouteContributesIntro(t *testing.T) {
 	}
 }
 
-func TestRouter_FRunWithHelp_PrefersLiteralScopeOverParameterizedSibling(t *testing.T) {
+func TestRouter_FPrintHelp_PrefersLiteralScopeOverParameterizedSibling(t *testing.T) {
 	r := New()
 	noop := func(req *Request) error { return nil }
 
@@ -223,8 +173,8 @@ func TestRouter_FRunWithHelp_PrefersLiteralScopeOverParameterizedSibling(t *test
 	r.Handle("thread current refresh", "Refresh current thread", noop)
 
 	var buf bytes.Buffer
-	if err := r.FRunWithHelp(context.Background(), &buf, []string{"thread", "current", "help"}); err != nil {
-		t.Fatalf("FRunWithHelp returned error: %v", err)
+	if err := r.FPrintHelp(context.Background(), &buf, []string{"thread", "current"}); err != nil {
+		t.Fatalf("FPrintHelp returned error: %v", err)
 	}
 
 	out := buf.String()

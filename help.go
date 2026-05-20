@@ -9,15 +9,6 @@ import (
 	"strings"
 )
 
-const helpToken = "help"
-const helpAllToken = "all"
-
-// HelpRequest is clir's built-in trailing help/help all convention.
-type HelpRequest struct {
-	Scope []string
-	All   bool
-}
-
 // RouteInfo is the stable public representation of a route for help/discovery APIs.
 type RouteInfo struct {
 	Pattern     string
@@ -44,6 +35,35 @@ type helpOptions struct {
 	filter        func(RouteInfo) bool
 	depth         *int
 	litDepth      *int
+}
+
+// IsHelpRequest reports whether argv ends with clir's built-in help token
+// convention: "help", "--help", or "—help".
+func IsHelpRequest(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	return isHelpToken(argv[len(argv)-1])
+}
+
+// StripHelpToken returns argv without a trailing clir help token. If argv does
+// not end with a help token, StripHelpToken returns a copy of argv unchanged.
+func StripHelpToken(argv []string) []string {
+	if !IsHelpRequest(argv) {
+		return append([]string{}, argv...)
+	}
+	return append([]string{}, argv[:len(argv)-1]...)
+}
+
+func isHelpToken(arg string) bool {
+	switch arg {
+	// Some chat/mobile inputs render --help with an em dash. Accepting it here
+	// keeps help detection forgiving without changing route matching itself.
+	case "help", "--help", "—help":
+		return true
+	default:
+		return false
+	}
 }
 
 // IncludeHidden includes routes marked Hidden in help output.
@@ -101,113 +121,20 @@ func routeInfo(rt *route) RouteInfo {
 	}
 }
 
-// RunWithHelp is the convenience form requested originally.
-// It writes managed help to stdout.
-func (r *Router) RunWithHelp(ctx context.Context, argv []string) error {
-	return r.FRunWithHelp(ctx, os.Stdout, argv)
-}
-
-// FRunWithHelp behaves like Run, but if argv ends with "help" or "help all"
-// it renders contextual help for that command path instead of running a handler.
-func (r *Router) FRunWithHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
-	if w == nil {
-		w = os.Stdout
-	}
-
-	res, err := r.Resolve(ctx, argv)
-	if helpReq, ok := ParseHelpRequest(argv); ok {
-		if err == nil && res.Executable && res.Exact {
-			return res.Handler(res.Request)
-		}
-		return r.printCommandHelp(w, helpReq.Scope, helpReq.All, makeHelpOptions(opts...))
-	}
-
-	if err != nil {
-		return err
-	}
-	if !res.Executable {
-		return fmt.Errorf("command `%s` is not executable", strings.Join(argv, " "))
-	}
-	return res.Handler(res.Request)
-}
-
 // FPrintHelp renders contextual help for argv.
-// If argv ends with "help" or "help all", those tokens are interpreted as help
-// modifiers. Otherwise argv is treated as the command scope.
+// argv is treated exactly as the command scope; it is not parsed for trailing
+// help tokens.
 func (r *Router) FPrintHelp(ctx context.Context, w io.Writer, argv []string, opts ...HelpOption) error {
 	_ = ctx
-	helpReq, ok := ParseHelpRequest(argv)
-	if !ok {
-		helpReq = HelpRequest{Scope: append([]string{}, argv...)}
-	}
 	if w == nil {
 		w = os.Stdout
 	}
-	return r.printCommandHelp(w, helpReq.Scope, helpReq.All, makeHelpOptions(opts...))
+	return r.printCommandHelp(w, append([]string{}, argv...), makeHelpOptions(opts...))
 }
 
-// ParseHelpRequest parses clir's built-in trailing help/help all convention.
-func ParseHelpRequest(argv []string) (HelpRequest, bool) {
-	switch {
-	case len(argv) >= 2 && argv[len(argv)-2] == helpToken && argv[len(argv)-1] == helpAllToken:
-		return HelpRequest{
-			Scope: append([]string{}, argv[:len(argv)-2]...),
-			All:   true,
-		}, true
-	case len(argv) >= 1 && argv[len(argv)-1] == helpToken:
-		return HelpRequest{
-			Scope: append([]string{}, argv[:len(argv)-1]...),
-		}, true
-	default:
-		return HelpRequest{}, false
-	}
-}
-
-// bestHelpRoute resolves an explicit help route for the full argv.
-// It only returns routes whose final literal segment is "help".
-func (r *Router) bestHelpRoute(argv []string) (*route, bool) {
-	bestIdx := -1
-	var bestRank uint64
-
-	for i := range r.routes {
-		rt := &r.routes[i]
-
-		if !isExplicitHelpRoute(rt) {
-			continue
-		}
-
-		rank, _ := rt.matchArgv(argv)
-		if rank == 0 {
-			continue
-		}
-
-		if bestIdx == -1 || rank > bestRank {
-			bestIdx = i
-			bestRank = rank
-		}
-	}
-
-	if bestIdx == -1 {
-		return nil, false
-	}
-	return &r.routes[bestIdx], true
-}
-
-func isExplicitHelpRoute(rt *route) bool {
-	if rt == nil || len(rt.segments) == 0 {
-		return false
-	}
-	last := rt.segments[len(rt.segments)-1]
-	return last.lit == helpToken
-}
-
-func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts helpOptions) error {
-	helpRoute, hasHelpRoute := r.bestHelpRoute(append(append([]string{}, scope...), helpToken))
-	if !hasHelpRoute {
-		helpRoute, hasHelpRoute = r.bestScopeRoute(scope)
-	}
-
-	entries := r.helpEntries(scope, all, opts)
+func (r *Router) printCommandHelp(w io.Writer, scope []string, opts helpOptions) error {
+	helpRoute, hasHelpRoute := r.bestScopeRoute(scope)
+	entries := r.helpEntries(scope, opts)
 
 	if !hasHelpRoute && len(entries) == 0 {
 		return fmt.Errorf("no help available for `%s`", strings.Join(scope, " "))
@@ -231,24 +158,69 @@ func (r *Router) printCommandHelp(w io.Writer, scope []string, all bool, opts he
 }
 
 func (r *Router) bestScopeRoute(scope []string) (*route, bool) {
-	rt, req, ok := r.bestMatch(context.Background(), scope)
-	if !ok || len(req.Extra) != 0 || rt.handler != nil {
+	bestIdx := -1
+	var bestRank uint64
+
+	for i := range r.routes {
+		rt := &r.routes[i]
+		if rt.handler != nil || len(rt.segments) != len(scope) {
+			continue
+		}
+
+		rank := uint64(1)
+		if len(scope) > 0 {
+			rank, _ = rt.matchArgv(scope)
+			if rank == 0 {
+				continue
+			}
+		}
+
+		if bestIdx == -1 || rank > bestRank {
+			bestIdx = i
+			bestRank = rank
+		}
+	}
+
+	if bestIdx == -1 {
 		return nil, false
 	}
-	return rt, true
+	return &r.routes[bestIdx], true
 }
 
-func (r *Router) helpEntries(scope []string, all bool, opts helpOptions) []RouteInfo {
+func (r *Router) helpEntries(scope []string, opts helpOptions) []RouteInfo {
 	descendants := r.descendantRoutes(scope)
-	if all {
-		// `help all` is an explicit request for the full subtree and therefore
-		// overrides Depth/LitDepth limits supplied by the caller.
-		return sortedRouteInfos(filterOutHelpRoutes(descendants), opts)
-	}
 	if !opts.hasDepthLimit() {
-		return sortedRouteInfos(filterOutHelpRoutes(descendants), opts)
+		return sortedRouteInfos(uniqueHelpRoutes(descendants), opts)
 	}
 	return consolidateHelpRoutes(scope, descendants, opts)
+}
+
+func uniqueHelpRoutes(routes []*route) []*route {
+	entries := map[string]*route{}
+
+	for _, rt := range routes {
+		key := rt.String()
+		existing, ok := entries[key]
+		if !ok {
+			entries[key] = rt
+			continue
+		}
+		if existing.handler == nil && rt.handler != nil {
+			entries[key] = rt
+			continue
+		}
+		if existing.desc == "" && rt.desc != "" {
+			cp := *existing
+			cp.desc = rt.desc
+			entries[key] = &cp
+		}
+	}
+
+	out := make([]*route, 0, len(entries))
+	for _, rt := range entries {
+		out = append(out, rt)
+	}
+	return out
 }
 
 // PrintHelp prints all registered patterns and their descriptions.
@@ -265,16 +237,6 @@ func (r *Router) PrintHelp(w io.Writer, opts ...HelpOption) {
 	sortRoutesForHelp(all)
 
 	r.writeHelpEntries(w, sortedRouteInfos(all, makeHelpOptions(opts...)))
-}
-
-func filterOutHelpRoutes(routes []*route) []*route {
-	out := make([]*route, 0, len(routes))
-	for _, rt := range routes {
-		if !isExplicitHelpRoute(rt) {
-			out = append(out, rt)
-		}
-	}
-	return out
 }
 
 func consolidateHelpRoutes(scope []string, routes []*route, opts helpOptions) []RouteInfo {
@@ -316,9 +278,6 @@ func consolidateHelpRoutes(scope []string, routes []*route, opts helpOptions) []
 func helpEntryRoute(scope []string, rt *route, opts helpOptions) *route {
 	segs := rt.segments
 	desc := rt.desc
-	if isExplicitHelpRoute(rt) {
-		segs = rt.segments[:len(rt.segments)-1]
-	}
 
 	if len(segs) <= len(scope) {
 		return nil
